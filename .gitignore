@@ -19,7 +19,7 @@ go.sum
 .vscode/
 
 # Env & local config
-.env
+
 *.local.json
 storage.json
 storage/browser_cookies.json
