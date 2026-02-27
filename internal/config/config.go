@@ -51,8 +51,8 @@ func Load() (*Config, error) {
 
 	cfg.ValorantGameID = getEnvOrDefault("VALORANT_GAME_ID", "")
 
-	cfg.PollIntervalOpenOrders = getDurationOrDefault("POLL_INTERVAL_OPEN_ORDERS", 30*time.Second)
-	cfg.PollIntervalOrderStatus = getDurationOrDefault("POLL_INTERVAL_ORDER_STATUS", 30*time.Second)
+	cfg.PollIntervalOpenOrders = getDurationOrDefault("POLL_INTERVAL_OPEN_ORDERS", 10*time.Second)
+	cfg.PollIntervalOrderStatus = getDurationOrDefault("POLL_INTERVAL_ORDER_STATUS", 10*time.Second)
 
 	cfg.TelegramBotToken = getEnvOrDefault("TELEGRAM_BOT_TOKEN", "")
 	chatIDStr := getEnvOrDefault("TELEGRAM_CHAT_ID", "0")
@@ -70,7 +70,7 @@ func Load() (*Config, error) {
 	cfg.DeliveryTime = getEnvOrDefault("DELIVERY_TIME", "Hour1")
 
 	cfg.BuyerAutoMessage = strings.ReplaceAll(getEnvOrDefault("BUYER_AUTO_MESSAGE", ""), `\n`, "\n")
-	cfg.BuyerAutoImage = getEnvOrDefault("BUYER_AUTO_IMAGE", "")
+	cfg.BuyerAutoImage = getEnvOrDefault("BUYER_AUTO_IMAGE", "Radifix.jpeg")
 
 	cfg.TalkJsNymId = getEnvOrDefault("TALKJS_NYM_ID", "")
 	cfg.TalkJsToken = getEnvOrDefault("TALKJS_TOKEN", "")

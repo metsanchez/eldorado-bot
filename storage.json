@@ -95,6 +95,7 @@
     "69a9b884-0036-44cf-bf66-900170d04b26": true,
     "6a81f962-e350-4039-b736-9b02f74e7e61": true,
     "6ac42f98-97a8-4bdd-8a2b-39ea347fab39": true,
+    "6b883e97-3c73-4cb2-bcb3-87b65f3dd7b5": true,
     "6c158181-9cb3-44d1-81d8-606926914365": true,
     "6c96625a-2ad6-4a06-877e-e54540a858da": true,
     "6cb93c21-012d-41d3-9af3-34bd5dd8132a": true,
@@ -132,6 +133,7 @@
     "9393e1bb-9abf-48f2-b9d6-cc9d0b1ad848": true,
     "959b1919-c109-4475-93e5-9fa3c033bcf3": true,
     "95b64277-51d9-487b-84f1-06e84dbba608": true,
+    "95feb1ce-efcc-43e5-88be-3fac1f1587f4": true,
     "973b86c7-71ae-421f-9035-f229f9e1c5bd": true,
     "987657d7-b92e-4d77-a413-50a760a35bbd": true,
     "98f9d873-68d4-46ab-90aa-06caba94d4dc": true,
@@ -169,6 +171,7 @@
     "b509f208-43f0-4d91-b1d2-40e4cf8dcbcf": true,
     "b5955e46-e203-4c36-9d59-618d96dbc64f": true,
     "b6293e9f-5cba-4159-8913-62e9f2a6929c": true,
+    "b685d2ec-d01a-4db4-bcd7-e12780355e86": true,
     "b728ab29-b556-485c-b4f4-142cf8f7a3eb": true,
     "b8738f14-4891-405f-a460-239e3620a9da": true,
     "b8d4c5db-f704-4092-af4e-7c372487ec2e": true,
@@ -440,6 +443,17 @@
       "trackingStatus": "offer_pending",
       "lastStatusCheck": "2026-02-26T10:35:42.347521-08:00"
     },
+    "95feb1ce-efcc-43e5-88be-3fac1f1587f4": {
+      "orderId": "95feb1ce-efcc-43e5-88be-3fac1f1587f4",
+      "lastKnownStatus": "OfferSubmitted",
+      "trackingStatus": "offer_pending",
+      "lastStatusCheck": "2026-02-27T07:07:14.538218-08:00",
+      "offerPrice": 60,
+      "currentRank": "Immortal II",
+      "desiredRank": "Immortal III",
+      "currentRR": "45",
+      "categoryTitle": "Rank Boost"
+    },
     "987657d7-b92e-4d77-a413-50a760a35bbd": {
       "orderId": "987657d7-b92e-4d77-a413-50a760a35bbd",
       "lastKnownStatus": "OfferSubmitted",
@@ -647,10 +661,10 @@
   },
   "buyerReplyNotified": {},
   "stats": {
-    "offersCreated": 22,
+    "offersCreated": 23,
     "offersWon": 0,
     "offersLost": 4,
     "messagesSent": 8,
-    "lastUpdated": "2026-02-27T07:03:14.625286-08:00"
+    "lastUpdated": "2026-02-27T07:07:14.539716-08:00"
   }
 }

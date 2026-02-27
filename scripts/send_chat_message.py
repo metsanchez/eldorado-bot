@@ -101,8 +101,9 @@ def main():
         # Send image first if provided
         if image_path:
             send_image(talkjs_frame, image_path, page)
-            # Even after successful image send, preview overlay can remain briefly.
+            # Overlay kapanması ve görsel yüklemesinin tamamlanması için bekleme
             close_upload_overlay(talkjs_frame, page)
+            page.wait_for_timeout(1500)
 
         # Send text message
         success = send_message(talkjs_frame, message_text, page)
@@ -136,7 +137,7 @@ def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
     """Go to boosting-request page, click Chat with buyer. Most reliable path."""
     url = f"{base_url}/boosting-request/{request_id}"
     log(f"navigating to {url}")
-    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    page.goto(url, wait_until="domcontentloaded", timeout=45000)
     wait_for_cloudflare(page, "request-detail")
     page.wait_for_timeout(3500)
     log(f"page title: {page.title()}")
@@ -177,7 +178,7 @@ def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
 
     chat_btn.click()
     log("clicked 'Chat with buyer'")
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(3500)
     return find_talkjs_frame(page), "fallback"
 
 
@@ -336,11 +337,11 @@ def send_image(frame, image_path, page):
             file_input = frame.query_selector('input[type="file"]')
             if file_input:
                 file_input.set_input_files(abs_path)
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(4500)
                 log("image selected via file input")
 
                 send_clicked = click_image_send(frame, page)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2500)
                 if send_clicked:
                     log("image sent successfully")
                     return True
@@ -349,7 +350,7 @@ def send_image(frame, image_path, page):
                 close_upload_overlay(frame, page)
         except Exception as e:
             log(f"image upload attempt {attempt + 1}: {e}")
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(2000)
 
     log("WARNING: could not upload image after retries")
     return False
@@ -399,9 +400,9 @@ def click_image_send(frame, page):
                 btn = scope.query_selector(sel)
                 if btn and btn.is_visible():
                     try:
-                        btn.click(timeout=1200)
+                        btn.click(timeout=3000)
                     except Exception:
-                        btn.click(force=True, timeout=1200)
+                        btn.click(force=True, timeout=3000)
                     log(f"clicked image Send ({scope_name}): {sel}")
                     return True
             except Exception:

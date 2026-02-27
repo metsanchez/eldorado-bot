@@ -151,7 +151,7 @@ func (c *Client) NotifyOrderAssigned(ctx context.Context, requestID, buyerUserna
 func (c *Client) NotifyOrderAssignedWithDetails(ctx context.Context, requestID, buyerUsername, categoryTitle, gameID string, offerPrice float64, currentRank, desiredRank, currentRR string) {
 	text := "<b>Yeni siparis sana atandi!</b>\n\n"
 	text += fmt.Sprintf("Talep ID: <code>%s</code>\n", requestID)
-	text += fmt.Sprintf("Alici: %s\n", buyerUsername)
+	text += fmt.Sprintf("Alıcı: %s\n", buyerUsername)
 	text += fmt.Sprintf("Kategori: %s\n", categoryTitle)
 	text += fmt.Sprintf("Oyun ID: %s\n", gameID)
 	if offerPrice > 0 {

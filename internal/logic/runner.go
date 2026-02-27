@@ -331,6 +331,7 @@ func (r *Runner) checkBuyerRepliesOnce(ctx context.Context) error {
 		if !ok {
 			continue
 		}
+		// Sadece müşterinin attığı ilk mesajda Telegram bildirimi gönder
 		if r.storage.IsBuyerReplyNotified(item.ID) {
 			continue
 		}
@@ -344,7 +345,7 @@ func (r *Runner) checkBuyerRepliesOnce(ctx context.Context) error {
 		}
 		text := fmt.Sprintf(
 			"<b>💬 Müşteri Mesaj Attı (İlk Bildirim)</b>\n\n"+
-				"Alici: %s\n"+
+				"Alıcı: %s\n"+
 				"Kategori: %s\n"+
 				"Fiyat: <b>$%.2f</b>%s\n"+
 				"Request ID: <code>%s</code>\n"+
@@ -533,6 +534,11 @@ func (r *Runner) runOfferStatusLoop(ctx context.Context) error {
 }
 
 func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
+	pendingByID := make(map[string]storage.TrackedOrder)
+	for _, tr := range r.storage.ListTrackedOrdersByStatus(storage.StatusOfferPending) {
+		pendingByID[tr.OrderID] = tr
+	}
+
 	wonPage, err := r.eld.ListReceivedBoostingRequests(ctx, eldorado.FilterOfferWon, "")
 	if err != nil {
 		return err
@@ -541,23 +547,22 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 	r.log.Infof("checking offer status: %d won", len(wonPage.Results))
 
 	for _, item := range wonPage.Results {
-		tracked := r.storage.ListTrackedOrdersByStatus(storage.StatusOfferPending)
-		for _, tr := range tracked {
-			if tr.OrderID == item.ID {
-				r.log.Infof("offer WON for request %s (buyer=%s)!", item.ID, item.BuyerUsername)
-				catTitle := tr.CategoryTitle
-				if catTitle == "" {
-					catTitle = item.BoostingCategoryTitle
-				}
-				r.tg.NotifyOrderAssignedWithDetails(ctx, item.ID, item.BuyerUsername, catTitle, item.GameID,
-					tr.OfferPrice, tr.CurrentRank, tr.DesiredRank, tr.CurrentRR)
-				if err := r.storage.UpdateTrackedOrderStatus(item.ID, "OfferWon", storage.StatusAssigned); err != nil {
-					r.log.Errorf("update tracked order failed (id=%s): %v", item.ID, err)
-				}
-				r.storage.IncrementOffersWon()
-				break
-			}
+		tr, ok := pendingByID[item.ID]
+		if !ok {
+			continue
 		}
+		r.log.Infof("offer WON for request %s (buyer=%s)!", item.ID, item.BuyerUsername)
+		catTitle := tr.CategoryTitle
+		if catTitle == "" {
+			catTitle = item.BoostingCategoryTitle
+		}
+		r.tg.NotifyOrderAssignedWithDetails(ctx, item.ID, item.BuyerUsername, catTitle, item.GameID,
+			tr.OfferPrice, tr.CurrentRank, tr.DesiredRank, tr.CurrentRR)
+		if err := r.storage.UpdateTrackedOrderStatus(item.ID, "OfferWon", storage.StatusAssigned); err != nil {
+			r.log.Errorf("update tracked order failed (id=%s): %v", item.ID, err)
+		}
+		r.storage.IncrementOffersWon()
+		delete(pendingByID, item.ID)
 	}
 
 	lostPage, err := r.eld.ListReceivedBoostingRequests(ctx, eldorado.FilterOfferLost, "")
@@ -566,17 +571,15 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 	}
 
 	for _, item := range lostPage.Results {
-		pending := r.storage.ListTrackedOrdersByStatus(storage.StatusOfferPending)
-		for _, tr := range pending {
-			if tr.OrderID == item.ID {
-				r.log.Infof("offer LOST for request %s", item.ID)
-				if err := r.storage.UpdateTrackedOrderStatus(item.ID, "OfferLost", storage.StatusClosed); err != nil {
-					r.log.Errorf("update tracked order failed (id=%s): %v", item.ID, err)
-				}
-				r.storage.IncrementOffersLost()
-				break
-			}
+		if _, ok := pendingByID[item.ID]; !ok {
+			continue
 		}
+		r.log.Infof("offer LOST for request %s", item.ID)
+		if err := r.storage.UpdateTrackedOrderStatus(item.ID, "OfferLost", storage.StatusClosed); err != nil {
+			r.log.Errorf("update tracked order failed (id=%s): %v", item.ID, err)
+		}
+		r.storage.IncrementOffersLost()
+		delete(pendingByID, item.ID)
 	}
 
 	return nil
@@ -584,21 +587,31 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 
 func (r *Runner) buildBuyerAutoMessage(requestID string) string {
 	_ = requestID
-	// TalkJS list formatu: satır başında - * veya + ile madde işareti oluşur, satır sonları korunur
+	// Düzenli mesaj formatı: bölümler arası çift satır sonu, madde işaretleri ile okunabilir yapı
 	return `Hi! 👋 I provide professional Valorant boosting services for all ranks.
 
-- ✔ Free Stream and Agent selection
-- ✔ 4+ Years of Boosting Experience
-- ✔ Radiant Since Beta
-- ✔ 100% Feedbacks
-- ✔ High K/D & Consistent Performance
-- ✔ 100% Legit – No Cheats or Third-Party Programs
-- ✔ Offline Mode Available (Discreet Service)
-- ✔ No Voice or Text Communication
 
-- ⭐ Free Stream
-- ⭐ Free Agent Selection
-- ⭐ Free Priority`
+📋 WHAT I OFFER
+
+✓ Free Stream and Agent selection
+✓ 4+ Years of Boosting Experience
+✓ Radiant Since Beta
+✓ 100% Feedbacks
+✓ High K/D & Consistent Performance
+
+
+🛡️ LEGIT & DISCREET
+
+✓ 100% Legit – No Cheats or Third-Party Programs
+✓ Offline Mode Available (Discreet Service)
+✓ No Voice or Text Communication
+
+
+⭐ EXTRAS INCLUDED
+
+⭐ Free Stream
+⭐ Free Agent Selection
+⭐ Free Priority`
 }
 
 func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
