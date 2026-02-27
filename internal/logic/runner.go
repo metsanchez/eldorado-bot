@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ const (
 	authAlertThreshold    = 3
 	msgAlertThreshold     = 3
 	criticalAlertCooldown = time.Hour
+	offerSummaryInterval  = 10 * time.Minute
 )
 
 type Runner struct {
@@ -27,8 +29,10 @@ type Runner struct {
 	eld     *eldorado.Client
 	tg      *telegram.Client
 	storage *storage.JSONStorage
-	chatMu  sync.Mutex // serialize buyer messages — only one Chrome at a time
+	chatMu  sync.Mutex     // serialize buyer messages — only one Chrome at a time
 	msgWg   sync.WaitGroup // for graceful shutdown: wait for in-flight messages
+	sumMu   sync.Mutex
+	sumData offerSummaryData
 
 	// Critical error tracking
 	authFailMu    sync.Mutex
@@ -38,6 +42,12 @@ type Runner struct {
 	msgFailMu    sync.Mutex
 	msgFailCount int
 	lastMsgAlert time.Time
+}
+
+type offerSummaryData struct {
+	Count       int
+	TotalAmount float64
+	ByCategory  map[string]int
 }
 
 func NewRunner(
@@ -53,6 +63,9 @@ func NewRunner(
 		eld:     eldClient,
 		tg:      tgClient,
 		storage: st,
+		sumData: offerSummaryData{
+			ByCategory: make(map[string]int),
+		},
 	}
 }
 
@@ -134,6 +147,8 @@ func (r *Runner) Start(ctx context.Context) error {
 	}()
 
 	go r.runStatsCommandLoop(ctx)
+	go r.runOfferSummaryLoop(ctx)
+	go r.runBuyerReplyNotifyLoop(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -202,6 +217,162 @@ func (r *Runner) runStatsCommandLoop(ctx context.Context) {
 			_ = r.tg.SendMessageToChat(ctx, u.Message.Chat.ID, msg)
 		}
 	}
+}
+
+func (r *Runner) recordOfferSummary(category string, amount float64) {
+	r.sumMu.Lock()
+	defer r.sumMu.Unlock()
+
+	if r.sumData.ByCategory == nil {
+		r.sumData.ByCategory = make(map[string]int)
+	}
+
+	r.sumData.Count++
+	r.sumData.TotalAmount += amount
+	if strings.TrimSpace(category) == "" {
+		category = "Unknown"
+	}
+	r.sumData.ByCategory[category]++
+}
+
+func (r *Runner) snapshotAndResetOfferSummary() offerSummaryData {
+	r.sumMu.Lock()
+	defer r.sumMu.Unlock()
+
+	snapshot := offerSummaryData{
+		Count:       r.sumData.Count,
+		TotalAmount: r.sumData.TotalAmount,
+		ByCategory:  make(map[string]int, len(r.sumData.ByCategory)),
+	}
+	for k, v := range r.sumData.ByCategory {
+		snapshot.ByCategory[k] = v
+	}
+
+	r.sumData.Count = 0
+	r.sumData.TotalAmount = 0
+	r.sumData.ByCategory = make(map[string]int)
+	return snapshot
+}
+
+func (r *Runner) runOfferSummaryLoop(ctx context.Context) {
+	if r.cfg.TelegramBotToken == "" || r.cfg.TelegramChatID == 0 {
+		return
+	}
+
+	ticker := time.NewTicker(offerSummaryInterval)
+	defer ticker.Stop()
+	r.log.Infof("offer summary loop started (interval=%s)", offerSummaryInterval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			summary := r.snapshotAndResetOfferSummary()
+			if summary.Count == 0 {
+				continue
+			}
+
+			lines := make([]string, 0, len(summary.ByCategory))
+			categories := make([]string, 0, len(summary.ByCategory))
+			for category := range summary.ByCategory {
+				categories = append(categories, category)
+			}
+			sort.Strings(categories)
+			for _, category := range categories {
+				lines = append(lines, fmt.Sprintf("• %s: <b>%d</b>", category, summary.ByCategory[category]))
+			}
+
+			avg := summary.TotalAmount / float64(summary.Count)
+			msg := fmt.Sprintf(
+				"<b>📦 10 Dakikalık Teklif Özeti</b>\n\n"+
+					"Verilen teklif: <b>%d</b>\n"+
+					"Toplam tutar: <b>$%.2f</b>\n"+
+					"Ortalama teklif: <b>$%.2f</b>\n\n"+
+					"<b>Kategori dağılımı</b>\n%s",
+				summary.Count, summary.TotalAmount, avg, strings.Join(lines, "\n"))
+
+			if err := r.tg.SendMessage(ctx, msg); err != nil {
+				r.log.Errorf("telegram summary send failed: %v", err)
+			}
+		}
+	}
+}
+
+func (r *Runner) runBuyerReplyNotifyLoop(ctx context.Context) {
+	if r.cfg.TelegramBotToken == "" || r.cfg.TelegramChatID == 0 {
+		return
+	}
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	r.log.Infof("buyer reply notify loop started (interval=30s)")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.checkBuyerRepliesOnce(ctx); err != nil {
+				r.log.Errorf("buyer reply notify loop error: %v", err)
+			}
+		}
+	}
+}
+
+func (r *Runner) checkBuyerRepliesOnce(ctx context.Context) error {
+	page, err := r.eld.ListReceivedBoostingRequests(ctx, eldorado.FilterOfferSubmitted, r.cfg.ValorantGameID)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range page.Results {
+		tr, ok := r.storage.GetTrackedOrder(item.ID)
+		if !ok {
+			continue
+		}
+		if r.storage.IsBuyerReplyNotified(item.ID) {
+			continue
+		}
+		if !looksLikeBuyerReplied(item) {
+			continue
+		}
+
+		rankInfo := ""
+		if tr.CurrentRank != "" && tr.DesiredRank != "" {
+			rankInfo = fmt.Sprintf("\nRank: <b>%s</b> ➜ <b>%s</b>", tr.CurrentRank, tr.DesiredRank)
+		}
+		text := fmt.Sprintf(
+			"<b>💬 Müşteri Mesaj Attı (İlk Bildirim)</b>\n\n"+
+				"Alici: %s\n"+
+				"Kategori: %s\n"+
+				"Fiyat: <b>$%.2f</b>%s\n"+
+				"Request ID: <code>%s</code>\n"+
+				"Hızlı komut: <code>/open_request %s</code>",
+			item.BuyerUsername, tr.CategoryTitle, tr.OfferPrice, rankInfo, item.ID, item.ID,
+		)
+		requestURL := strings.TrimRight(r.cfg.EldoradoBaseURL, "/") + "/boosting-request/" + item.ID
+		if err := r.tg.SendMessageWithURLButton(ctx, r.cfg.TelegramChatID, text, "🔗 Request'i Aç", requestURL); err != nil {
+			r.log.Errorf("telegram buyer-reply send failed: %v", err)
+			continue
+		}
+		if err := r.storage.MarkBuyerReplyNotified(item.ID); err != nil {
+			r.log.Errorf("mark buyer reply notified failed (id=%s): %v", item.ID, err)
+		}
+	}
+
+	return nil
+}
+
+func looksLikeBuyerReplied(item eldorado.BoostingRequestListItem) bool {
+	if item.UnreadMessagesCount > 0 || item.HasUnreadMessages {
+		return true
+	}
+	if item.LastMessageSenderID != "" && item.BuyerID != "" && item.LastMessageSenderID == item.BuyerID {
+		return true
+	}
+	role := strings.ToLower(strings.TrimSpace(item.LastMessageSenderRole))
+	return strings.Contains(role, "buyer")
 }
 
 func (r *Runner) runBoostingRequestsLoop(ctx context.Context) error {
@@ -316,29 +487,8 @@ func (r *Runner) handleBoostingRequestsOnce(ctx context.Context) error {
 
 		r.log.Infof("offer created (offerId=%s, requestId=%s)", offer.ID, item.ID)
 
-		// Send Telegram notification about the offer
-		msg := fmt.Sprintf(
-			"<b>Teklif Verildi!</b>\n\n"+
-				"Fiyat: <b>$%.2f</b>\n"+
-				"Kategori: %s\n"+
-				"Method: <b>%s</b>\n"+
-				"Alici: %s\n"+
-				"Teslimat: %s",
-			result.Price, item.BoostingCategoryTitle, result.Method, item.BuyerUsername, result.DeliveryTime)
-		if cat == eldorado.CategoryRankBoost {
-			msg += fmt.Sprintf("\nRank: <b>%s</b> ➜ <b>%s</b>", detail.GetDescValue("Current Rank"), detail.GetDescValue("Desired rank"))
-		} else if cat == eldorado.CategoryNetWins {
-			msg += fmt.Sprintf("\nRank: <b>%s</b> | Oyun: <b>%s</b>", detail.GetDescValue("Current season rank"), detail.GetDescValue("Number of games"))
-		}
-		if cat == eldorado.CategoryRankBoost || cat == eldorado.CategoryNetWins {
-			if rr := detail.GetDescValue("Current RR"); rr != "" {
-				msg += fmt.Sprintf("\nRR: <b>%s</b>", rr)
-			}
-		}
-		msg += fmt.Sprintf("\n\nID: <code>%s</code>", item.ID)
-		if err := r.tg.SendMessage(ctx, msg); err != nil {
-			r.log.Errorf("telegram send failed: %v", err)
-		}
+		// Do not send per-offer Telegram message; queue it for 10-minute summary.
+		r.recordOfferSummary(item.BoostingCategoryTitle, result.Price)
 
 		detailRank := detail.GetDescValue("Current Rank")
 		detailDesired := detail.GetDescValue("Desired rank")
@@ -432,9 +582,73 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 	return nil
 }
 
+func (r *Runner) buildBuyerAutoMessage(requestID string) string {
+	tr, ok := r.storage.GetTrackedOrder(requestID)
+	if !ok {
+		return r.cfg.BuyerAutoMessage
+	}
+
+	if strings.TrimSpace(r.cfg.BuyerAutoMessage) != "" {
+		msg := strings.ReplaceAll(r.cfg.BuyerAutoMessage, "{current_rank}", tr.CurrentRank)
+		msg = strings.ReplaceAll(msg, "{desired_rank}", tr.DesiredRank)
+		msg = strings.ReplaceAll(msg, "{rr}", tr.CurrentRR)
+		msg = strings.ReplaceAll(msg, "{category}", tr.CategoryTitle)
+		msg = strings.ReplaceAll(msg, "{price}", fmt.Sprintf("$%.2f", tr.OfferPrice))
+		return msg
+	}
+
+	if tr.CategoryTitle == "" {
+		tr.CategoryTitle = "Valorant Boost"
+	}
+
+	detailLine := ""
+	if tr.CurrentRank != "" && tr.DesiredRank != "" {
+		detailLine = fmt.Sprintf("🎯 %s ➜ %s", tr.CurrentRank, tr.DesiredRank)
+	} else if tr.CurrentRank != "" {
+		detailLine = fmt.Sprintf("🎯 Current Rank: %s", tr.CurrentRank)
+	}
+	if tr.CurrentRR != "" {
+		if detailLine == "" {
+			detailLine = fmt.Sprintf("📈 Current RR: %s", tr.CurrentRR)
+		} else {
+			detailLine += fmt.Sprintf(" | RR: %s", tr.CurrentRR)
+		}
+	}
+
+	lines := []string{
+		"Hi! I provide professional Valorant boosting services for all ranks.",
+		"✔ Free Stream and Agent selection",
+		"✔ 4+ Years of Boosting Experience",
+		"✔ Radiant Since Beta",
+		"✔ %100 Feedbacks",
+		"✔ High K/D & Consistent Performance",
+		"✔ 100% Legit – No Cheats or Third-Party Programs",
+		"✔ Offline Mode Available (Discreet Service)",
+		"✔ No Voice or Text Communication",
+		"",
+		"⭐ Free Stream",
+		"⭐ Free Agent Selection",
+		"⭐ Free Priority",
+	}
+	if detailLine != "" {
+		lines = append(lines, "", detailLine)
+	}
+	lines = append(lines, fmt.Sprintf("Service: %s", tr.CategoryTitle), fmt.Sprintf("Price: $%.2f", tr.OfferPrice))
+
+	return strings.Join(lines, "\n")
+}
+
 func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 	defer r.msgWg.Done()
-	if r.cfg.BuyerAutoMessage == "" {
+	if strings.TrimSpace(r.cfg.BuyerAutoMessage) == "" {
+		if _, ok := r.storage.GetTrackedOrder(requestID); !ok {
+			r.log.Infof("buyer auto-message skipped (no message configured)")
+			return
+		}
+	}
+
+	message := r.buildBuyerAutoMessage(requestID)
+	if strings.TrimSpace(message) == "" {
 		r.log.Infof("buyer auto-message skipped (no message configured)")
 		return
 	}
@@ -453,7 +667,7 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 	}
 	r.log.Infof("conversation created (requestId=%s, talkJsId=%s)", requestID, conv.TalkJsConversationID)
 
-	if err := eldorado.SendChatMessage(ctx, requestID, r.cfg.BuyerAutoMessage, r.cfg.BuyerAutoImage, r.log); err != nil {
+	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, r.log); err != nil {
 		r.log.Errorf("send buyer message failed (requestId=%s): %v", requestID, err)
 		r.trackMsgError(ctx, requestID, err)
 		return

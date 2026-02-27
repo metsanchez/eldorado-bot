@@ -57,6 +57,25 @@ func (c *Client) SendMessage(ctx context.Context, text string) error {
 
 // SendMessageToChat sends a message to a specific chat (for /stats reply).
 func (c *Client) SendMessageToChat(ctx context.Context, chatID int64, text string) error {
+	return c.sendMessageToChat(ctx, chatID, text, nil)
+}
+
+// SendMessageWithURLButton sends a message with a single inline URL button.
+func (c *Client) SendMessageWithURLButton(ctx context.Context, chatID int64, text, buttonText, buttonURL string) error {
+	replyMarkup := map[string]any{
+		"inline_keyboard": [][]map[string]string{
+			{
+				{
+					"text": buttonText,
+					"url":  buttonURL,
+				},
+			},
+		},
+	}
+	return c.sendMessageToChat(ctx, chatID, text, replyMarkup)
+}
+
+func (c *Client) sendMessageToChat(ctx context.Context, chatID int64, text string, replyMarkup any) error {
 	if c.botToken == "" || chatID == 0 {
 		return nil
 	}
@@ -66,6 +85,9 @@ func (c *Client) SendMessageToChat(ctx context.Context, chatID int64, text strin
 		"chat_id":    chatID,
 		"text":       text,
 		"parse_mode": "HTML",
+	}
+	if replyMarkup != nil {
+		body["reply_markup"] = replyMarkup
 	}
 
 	b, err := json.Marshal(body)
@@ -108,8 +130,8 @@ func (c *Client) GetUpdates(ctx context.Context, offset int) ([]TelegramUpdate, 
 	}
 	defer resp.Body.Close()
 	var out struct {
-		OK     bool              `json:"ok"`
-		Result []TelegramUpdate  `json:"result"`
+		OK     bool             `json:"ok"`
+		Result []TelegramUpdate `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err

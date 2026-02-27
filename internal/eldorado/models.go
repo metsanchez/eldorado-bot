@@ -11,6 +11,10 @@ type BoostingRequestListItem struct {
 	BuyerID               string `json:"buyerId"`
 	BuyerUsername         string `json:"buyerUsername"`
 	IsBuyerMuted          bool   `json:"isBuyerMuted"`
+	HasUnreadMessages     bool   `json:"hasUnreadMessages"`
+	UnreadMessagesCount   int    `json:"unreadMessagesCount"`
+	LastMessageSenderID   string `json:"lastMessageSenderId"`
+	LastMessageSenderRole string `json:"lastMessageSenderRole"`
 }
 
 type BoostingRequestPage struct {
@@ -158,16 +162,16 @@ const (
 const (
 	DeliveryHour1  = "Hour1"  // 1h
 	DeliveryHour2  = "Hour2"  // 2h
-	DeliveryHour3  = "Hour3"   // 3h
-	DeliveryHour5  = "Hour5"   // 5h
-	DeliveryHour8  = "Hour8"   // 8h
-	DeliveryHour12 = "Hour12"  // 12h
-	DeliveryDay1   = "Day1"    // 24h
-	DeliveryDay2   = "Day2"    // 48h
-	DeliveryDay3   = "Day3"    // 72h
+	DeliveryHour3  = "Hour3"  // 3h
+	DeliveryHour5  = "Hour5"  // 5h
+	DeliveryHour8  = "Hour8"  // 8h
+	DeliveryHour12 = "Hour12" // 12h
+	DeliveryDay1   = "Day1"   // 24h
+	DeliveryDay2   = "Day2"   // 48h
+	DeliveryDay3   = "Day3"   // 72h
 	DeliveryDay7   = "Day7"   // 168h
-	DeliveryDay14  = "Day14"   // 336h
-	DeliveryDay28  = "Day28"   // 672h
+	DeliveryDay14  = "Day14"  // 336h
+	DeliveryDay28  = "Day28"  // 672h
 )
 
 // Boosting category IDs for Valorant

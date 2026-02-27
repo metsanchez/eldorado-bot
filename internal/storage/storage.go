@@ -11,10 +11,10 @@ import (
 type TrackedOrderStatus string
 
 const (
-	StatusOfferPending      TrackedOrderStatus = "offer_pending"
-	StatusAssigned          TrackedOrderStatus = "assigned"
-	StatusAssignedNotified  TrackedOrderStatus = "assigned_notified"
-	StatusClosed            TrackedOrderStatus = "closed"
+	StatusOfferPending     TrackedOrderStatus = "offer_pending"
+	StatusAssigned         TrackedOrderStatus = "assigned"
+	StatusAssignedNotified TrackedOrderStatus = "assigned_notified"
+	StatusClosed           TrackedOrderStatus = "closed"
 )
 
 // TrackedOrder holds minimal info to track order state changes.
@@ -24,11 +24,11 @@ type TrackedOrder struct {
 	TrackingStatus  TrackedOrderStatus `json:"trackingStatus"`
 	LastStatusCheck time.Time          `json:"lastStatusCheck"`
 	// Offer details for "Sipariş Atandı" notification
-	OfferPrice   float64 `json:"offerPrice,omitempty"`
-	CurrentRank  string  `json:"currentRank,omitempty"`
-	DesiredRank  string  `json:"desiredRank,omitempty"`
-	CurrentRR    string  `json:"currentRR,omitempty"`
-	CategoryTitle string `json:"categoryTitle,omitempty"`
+	OfferPrice    float64 `json:"offerPrice,omitempty"`
+	CurrentRank   string  `json:"currentRank,omitempty"`
+	DesiredRank   string  `json:"desiredRank,omitempty"`
+	CurrentRR     string  `json:"currentRR,omitempty"`
+	CategoryTitle string  `json:"categoryTitle,omitempty"`
 }
 
 // Stats holds bot statistics for /stats command.
@@ -41,9 +41,10 @@ type Stats struct {
 }
 
 type state struct {
-	SeenOrderIDs   map[string]bool        `json:"seenOrderIds"`
-	TrackedOrders  map[string]TrackedOrder `json:"trackedOrders"`
-	Stats          Stats                   `json:"stats"`
+	SeenOrderIDs       map[string]bool         `json:"seenOrderIds"`
+	TrackedOrders      map[string]TrackedOrder `json:"trackedOrders"`
+	BuyerReplyNotified map[string]bool         `json:"buyerReplyNotified"`
+	Stats              Stats                   `json:"stats"`
 }
 
 // JSONStorage is a simple JSON-file-based implementation for tracking orders.
@@ -57,8 +58,9 @@ func NewJSONStorage(path string) (*JSONStorage, error) {
 	s := &JSONStorage{
 		path: path,
 		state: state{
-			SeenOrderIDs:  make(map[string]bool),
-			TrackedOrders: make(map[string]TrackedOrder),
+			SeenOrderIDs:       make(map[string]bool),
+			TrackedOrders:      make(map[string]TrackedOrder),
+			BuyerReplyNotified: make(map[string]bool),
 		},
 	}
 
@@ -90,6 +92,9 @@ func (s *JSONStorage) load() error {
 	}
 	if st.TrackedOrders == nil {
 		st.TrackedOrders = make(map[string]TrackedOrder)
+	}
+	if st.BuyerReplyNotified == nil {
+		st.BuyerReplyNotified = make(map[string]bool)
 	}
 
 	s.state = st
@@ -145,15 +150,15 @@ func (s *JSONStorage) TrackOrderWithDetails(orderID, lastKnownStatus string, tra
 	defer s.mu.Unlock()
 
 	s.state.TrackedOrders[orderID] = TrackedOrder{
-		OrderID:          orderID,
-		LastKnownStatus:  lastKnownStatus,
-		TrackingStatus:   trackingStatus,
-		LastStatusCheck:  time.Now(),
-		OfferPrice:       offerPrice,
-		CurrentRank:      currentRank,
-		DesiredRank:      desiredRank,
-		CurrentRR:        currentRR,
-		CategoryTitle:    categoryTitle,
+		OrderID:         orderID,
+		LastKnownStatus: lastKnownStatus,
+		TrackingStatus:  trackingStatus,
+		LastStatusCheck: time.Now(),
+		OfferPrice:      offerPrice,
+		CurrentRank:     currentRank,
+		DesiredRank:     desiredRank,
+		CurrentRR:       currentRR,
+		CategoryTitle:   categoryTitle,
 	}
 	return s.persist()
 }
@@ -186,6 +191,32 @@ func (s *JSONStorage) ListTrackedOrdersByStatus(status TrackedOrderStatus) []Tra
 		}
 	}
 	return res
+}
+
+// GetTrackedOrder returns tracked order details if found.
+func (s *JSONStorage) GetTrackedOrder(orderID string) (TrackedOrder, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tr, ok := s.state.TrackedOrders[orderID]
+	return tr, ok
+}
+
+// IsBuyerReplyNotified returns true if first buyer-reply alert already sent for this request.
+func (s *JSONStorage) IsBuyerReplyNotified(orderID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.BuyerReplyNotified[orderID]
+}
+
+// MarkBuyerReplyNotified marks that first buyer-reply alert was sent for this request.
+func (s *JSONStorage) MarkBuyerReplyNotified(orderID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.BuyerReplyNotified[orderID] {
+		return nil
+	}
+	s.state.BuyerReplyNotified[orderID] = true
+	return s.persist()
 }
 
 // IncrementOffersCreated increments the offers created counter.
@@ -230,4 +261,3 @@ func (s *JSONStorage) GetStats() Stats {
 	defer s.mu.Unlock()
 	return s.state.Stats
 }
-

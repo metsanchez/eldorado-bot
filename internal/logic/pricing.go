@@ -29,10 +29,10 @@ var rankOrder = []string{
 	"Radiant",
 }
 
-// Hours per division by tier: Iron–Plat 4h, Ascendant+ 7h
+// Hours per division by tier: Iron–Plat 4h, Ascendant 7h, Immortal 24h
 var hoursPerDivisionByTier = map[string]float64{
 	"iron": 4, "bronze": 4, "silver": 4, "gold": 4, "platinum": 4,
-	"diamond": 4, "ascendant": 7, "immortal": 7,
+	"diamond": 4, "ascendant": 7, "immortal": 24,
 }
 
 func hoursForDivision(rank string) float64 {
@@ -107,7 +107,7 @@ var divisionPrice = map[string]float64{
 	"Platinum I": 5, "Platinum II": 5, "Platinum III": 8,
 	"Diamond I": 10, "Diamond II": 10, "Diamond III": 11,
 	"Ascendant I": 15, "Ascendant II": 17, "Ascendant III": 19,
-	"Immortal I": 19, "Immortal II": 19, "Immortal III": 19,
+	"Immortal I": 33, "Immortal II": 65, "Immortal III": 50,
 }
 
 // rrDiscountForFirstDivision returns discount $ for Diamond+ based on current RR (0-99).
@@ -180,7 +180,7 @@ func checkServerAndMethod(req *eldorado.BoostingRequestFull) (multiplier float64
 }
 
 // CalculateRankBoostPrice calculates total price for a rank boost from currentRank to desiredRank.
-// Delivery time = sum of hours per division (Iron–Plat 4h, Ascendant+ 7h), mapped to Eldorado slots.
+// Delivery time = sum of hours per division (Iron–Plat 4h, Ascendant 7h, Immortal 24h), mapped to Eldorado slots.
 func CalculateRankBoostPrice(req *eldorado.BoostingRequestFull) PriceResult {
 	multiplier, methodName, skipResult, ok := checkServerAndMethod(req)
 	if !ok {
