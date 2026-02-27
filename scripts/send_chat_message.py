@@ -46,11 +46,22 @@ def main():
         cookies = json.load(f)
     log(f"loaded {len(cookies)} cookies from file")
 
+    # Headless on VPS: set HEADLESS=1 to use headless mode (sometimes works better with xvfb)
+    headless = os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             channel="chrome",
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-extensions",
+                "--no-first-run",
+            ],
         )
         context = browser.new_context(no_viewport=True)
 
@@ -168,7 +179,7 @@ def find_talkjs_frame(page):
 
 
 def send_message(frame, text):
-    """Type and send a message in the TalkJS chat."""
+    """Set message via JavaScript (React-compatible, works on VPS/xvfb) and send."""
     chat_input = None
     for selector in [
         '[placeholder="Say something..."]',
@@ -176,10 +187,11 @@ def send_message(frame, text):
         '[role="textbox"]',
         'div[contenteditable="true"]',
         '[class*="message-input"]',
+        '[class*="MessageInput"]',
     ]:
         try:
             el = frame.query_selector(selector)
-            if el:
+            if el and el.is_visible():
                 chat_input = el
                 log(f"found chat input: {selector}")
                 break
@@ -191,22 +203,84 @@ def send_message(frame, text):
         return False
 
     chat_input.click()
-    frame.wait_for_timeout(300)
+    frame.wait_for_timeout(600)
 
-    # Type message line by line using Shift+Enter for newlines, then Enter to send
-    lines = text.split("\n")
-    for i, line in enumerate(lines):
-        if i > 0:
-            chat_input.press("Shift+Enter")
-            frame.wait_for_timeout(100)
-        if line:
-            chat_input.type(line)
-            frame.wait_for_timeout(100)
+    # React-compatible: use native setter to bypass React's synthetic events (works on VPS/xvfb)
+    def set_value_and_emit(element, value):
+        try:
+            return element.evaluate(
+                """
+                (el, value) => {
+                    el.focus();
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                    if (tag === 'textarea' || tag === 'input') {
+                        const Proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                        const proto = Object.getOwnPropertyDescriptor(Proto, 'value');
+                        if (proto && proto.set) {
+                            proto.set.call(el, value);
+                        } else {
+                            el.value = value;
+                        }
+                        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    } else if (el.isContentEditable) {
+                        el.textContent = value;
+                        el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+                    }
+                    return true;
+                }
+                """,
+                value,
+            )
+        except Exception as e:
+            log(f"evaluate failed: {e}")
+            return False
 
-    frame.wait_for_timeout(300)
-    chat_input.press("Enter")
+    ok = set_value_and_emit(chat_input, text)
+    if not ok:
+        log("WARNING: JS set failed, trying fill()...")
+        try:
+            chat_input.fill(text)
+        except Exception as e:
+            log(f"fill failed: {e}")
+            return False
+
+    frame.wait_for_timeout(800)
+
+    # Send: try Send button first (TalkJS may show it after text is entered)
+    for _ in range(3):
+        for send_selector in [
+            'button:has-text("Send")',
+            'button[type="submit"]',
+            '[aria-label="Send"]',
+            '[data-testid="send-button"]',
+        ]:
+            try:
+                btn = frame.query_selector(send_selector)
+                if btn and btn.is_visible():
+                    btn.click()
+                    log(f"clicked Send: {send_selector}")
+                    frame.wait_for_timeout(1500)
+                    return True
+            except Exception:
+                continue
+        frame.wait_for_timeout(500)
+
+    # Fallback: dispatch Enter key via JavaScript (works when press() fails on headless)
+    try:
+        chat_input.evaluate(
+            """
+            (el) => {
+                const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                el.dispatchEvent(ev);
+            }
+            """
+        )
+        frame.wait_for_timeout(500)
+        chat_input.press("Enter")
+    except Exception as e:
+        log(f"Enter fallback: {e}")
     frame.wait_for_timeout(1000)
-    log("message typed and submitted")
     return True
 
 

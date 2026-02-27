@@ -154,17 +154,20 @@ const (
 	FilterOfferLost      = "OfferLost"
 )
 
-// Guaranteed delivery time enum values
+// Guaranteed delivery time enum values (Eldorado fixed slots)
 const (
-	DeliveryHour1  = "Hour1"
-	DeliveryHour2  = "Hour2"
-	DeliveryHour3  = "Hour3"
-	DeliveryHour5  = "Hour5"
-	DeliveryHour8  = "Hour8"
-	DeliveryHour12 = "Hour12"
-	DeliveryDay1   = "Day1"
-	DeliveryDay2   = "Day2"
-	DeliveryDay3   = "Day3"
+	DeliveryHour1  = "Hour1"  // 1h
+	DeliveryHour2  = "Hour2"  // 2h
+	DeliveryHour3  = "Hour3"   // 3h
+	DeliveryHour5  = "Hour5"   // 5h
+	DeliveryHour8  = "Hour8"   // 8h
+	DeliveryHour12 = "Hour12"  // 12h
+	DeliveryDay1   = "Day1"    // 24h
+	DeliveryDay2   = "Day2"    // 48h
+	DeliveryDay3   = "Day3"    // 72h
+	DeliveryDay7   = "Day7"   // 168h
+	DeliveryDay14  = "Day14"   // 336h
+	DeliveryDay28  = "Day28"   // 672h
 )
 
 // Boosting category IDs for Valorant

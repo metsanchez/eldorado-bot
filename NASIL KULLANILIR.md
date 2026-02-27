@@ -326,7 +326,7 @@ Division maliyeti = oyun sayısı × oyun başı fiyat
 | Immortal | 6 | 60 |
 
 > **Duo** sipariş = toplam fiyat **x2**
-> Teslimat süresi = division sayısı × 4 saat
+> Teslimat süresi: Iron–Plat division başı 4 saat, Ascendant ve sonrası division başı 7 saat
 
 ### Net Win (Oyun Başına Fiyat)
 
@@ -405,7 +405,39 @@ Eldorado Boyt/
 
 ---
 
-## 13. Sorun Giderme
+## 13. VPS Kurulumu (xvfb ile)
+
+Botu GUI olmayan bir VPS'de çalıştırırken Chrome için sanal ekran gerekir:
+
+```bash
+# xvfb kurulumu (Debian/Ubuntu)
+sudo apt install xvfb
+
+# Chrome kurulumu
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update && sudo apt install google-chrome-stable
+```
+
+Botu başlatmadan önce xvfb'yi çalıştır:
+
+```bash
+Xvfb :99 -screen 0 1920x1080x24 &
+export DISPLAY=:99
+./eldorado-bot
+```
+
+veya tek komutta:
+
+```bash
+DISPLAY=:99 ./eldorado-bot
+```
+
+> **Not:** Mesaj gönderme, xvfb ortamında `type()`/`press()` yerine JavaScript ile çalışacak şekilde ayarlandı. Eğer mesajlar hâlâ gitmiyorsa, `HEADLESS=1 ./eldorado-bot` ile deneyebilirsin.
+
+---
+
+## 14. Sorun Giderme
 
 ### "either ELDORADO_COOKIES or both ELDORADO_EMAIL+ELDORADO_PASSWORD must be set"
 
@@ -427,6 +459,15 @@ Eldorado Boyt/
 3. Mevcut aktif EU Valorant siparişi olduğundan emin olun
 4. Log çıktısında "skipping" mesajlarını kontrol edin (filtre nedeni yazar)
 
+### Kritik hata bildirimleri (Telegram)
+
+Bot, aşağıdaki durumlarda Telegram’a uyarı gönderir:
+- **Login hatası:** Bot başlarken Eldorado girişi başarısız olursa
+- **API/Auth hatası:** 401/403 veya re-login 3 kez üst üste başarısız olursa
+- **Mesaj hatası:** Alıcıya mesaj gönderme 3 kez üst üste başarısız olursa
+
+Aynı türde tekrar uyarı gönderilmez; en az 1 saat geçmesi gerekir (spam önleme).
+
 ### Telegram bildirimi gelmiyor
 
 1. `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` değerlerinin doğru olduğunu kontrol edin
@@ -440,7 +481,8 @@ Eldorado Boyt/
 
 1. `.env` dosyasında `BUYER_AUTO_MESSAGE` alanının dolu olduğunu kontrol edin
 2. `storage/browser_cookies.json` dosyasının var olduğunu kontrol edin
-3. Cookie'ler geçersiz olmuş olabilir — silin ve botu yeniden başlatın:
+3. **VPS'de:** `DISPLAY=:99` ile çalıştırdığınızdan emin olun. xvfb çalışıyor olmalı
+4. Cookie'ler geçersiz olmuş olabilir — silin ve botu yeniden başlatın:
    ```bash
    rm storage/browser_cookies.json
    ./start.sh
@@ -471,7 +513,7 @@ pkill -9 -f send_chat_message.py
 
 ---
 
-## 14. Güvenlik Notları
+## 15. Güvenlik Notları
 
 - `.env` dosyası **asla** git'e eklenmez (`.gitignore`'da tanımlı)
 - `storage/browser_cookies.json` oturum bilgilerinizi içerir — **paylaşmayın**
@@ -480,7 +522,7 @@ pkill -9 -f send_chat_message.py
 
 ---
 
-## 15. Botu Durdurmak
+## 16. Botu Durdurmak
 
 ```bash
 # Yöntem 1: Ctrl+C ile (terminal'de çalışıyorsa)

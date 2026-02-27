@@ -2,7 +2,10 @@ package logic
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"eldorado-bot/internal/config"
@@ -12,12 +15,28 @@ import (
 	"eldorado-bot/internal/telegram"
 )
 
+const (
+	authAlertThreshold    = 3
+	msgAlertThreshold     = 3
+	criticalAlertCooldown = time.Hour
+)
+
 type Runner struct {
 	log     *logger.Logger
 	cfg     *config.Config
 	eld     *eldorado.Client
 	tg      *telegram.Client
 	storage *storage.JSONStorage
+	chatMu  sync.Mutex // serialize buyer messages — only one Chrome at a time
+
+	// Critical error tracking
+	authFailMu    sync.Mutex
+	authFailCount int
+	lastAuthAlert time.Time
+
+	msgFailMu    sync.Mutex
+	msgFailCount int
+	lastMsgAlert time.Time
 }
 
 func NewRunner(
@@ -36,12 +55,66 @@ func NewRunner(
 	}
 }
 
+func (r *Runner) alertCritical(ctx context.Context, title, detail string) {
+	r.tg.SendMessage(ctx, fmt.Sprintf("⚠️ <b>%s</b>\n\n%s", title, detail))
+}
+
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, eldorado.ErrAuthExpired) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "re-login failed") || strings.Contains(s, "401") || strings.Contains(s, "403")
+}
+
+func (r *Runner) trackAuthError(ctx context.Context, err error) {
+	if !isAuthError(err) {
+		return
+	}
+	r.authFailMu.Lock()
+	defer r.authFailMu.Unlock()
+	r.authFailCount++
+	if r.authFailCount >= authAlertThreshold && time.Since(r.lastAuthAlert) > criticalAlertCooldown {
+		r.alertCritical(ctx, "Eldorado Auth Hatası",
+			fmt.Sprintf("API/Login %d kez üst üste başarısız.\n\nSon hata: %v", r.authFailCount, err))
+		r.lastAuthAlert = time.Now()
+	}
+}
+
+func (r *Runner) resetAuthFailCount() {
+	r.authFailMu.Lock()
+	defer r.authFailMu.Unlock()
+	r.authFailCount = 0
+}
+
+func (r *Runner) trackMsgError(ctx context.Context, requestID string, err error) {
+	r.msgFailMu.Lock()
+	defer r.msgFailMu.Unlock()
+	r.msgFailCount++
+	if r.msgFailCount >= msgAlertThreshold && time.Since(r.lastMsgAlert) > criticalAlertCooldown {
+		r.alertCritical(ctx, "Alıcı Mesaj Hatası",
+			fmt.Sprintf("Mesaj gönderme %d kez üst üste başarısız.\n\nSon request: %s\nSon hata: %v",
+				r.msgFailCount, requestID, err))
+		r.lastMsgAlert = time.Now()
+	}
+}
+
+func (r *Runner) resetMsgFailCount() {
+	r.msgFailMu.Lock()
+	defer r.msgFailMu.Unlock()
+	r.msgFailCount = 0
+}
+
 func (r *Runner) Start(ctx context.Context) error {
 	if r.cfg.BuyerAutoMessage != "" {
 		r.log.Infof("buyer auto-message enabled (%d chars)", len(r.cfg.BuyerAutoMessage))
 	}
 
 	if err := r.eld.Login(ctx); err != nil {
+		r.alertCritical(ctx, "Eldorado Login Hatası", fmt.Sprintf("Bot başlatılamadı: %v", err))
 		return err
 	}
 
@@ -76,6 +149,9 @@ func (r *Runner) runBoostingRequestsLoop(ctx context.Context) error {
 	for {
 		if err := retryWithBackoff(ctx, r.log, 3, time.Second, r.handleBoostingRequestsOnce); err != nil {
 			r.log.Errorf("boosting requests loop error after retries: %v", err)
+			r.trackAuthError(ctx, err)
+		} else {
+			r.resetAuthFailCount()
 		}
 
 		select {
@@ -135,6 +211,12 @@ func (r *Runner) handleBoostingRequestsOnce(ctx context.Context) error {
 			r.log.Infof("skipping request %s: %s (buyer=%s, category=%s)",
 				item.ID, result.SkipReason, item.BuyerUsername, item.BoostingCategoryTitle)
 			continue
+		}
+
+		// Floor: RR discount can push price very low — enforce minimum
+		if r.cfg.MinOfferPrice > 0 && result.Price < r.cfg.MinOfferPrice {
+			r.log.Infof("price floor applied: $%.2f -> $%.2f (request %s)", result.Price, r.cfg.MinOfferPrice, item.ID)
+			result.Price = r.cfg.MinOfferPrice
 		}
 
 		r.log.Infof("creating offer for request %s (buyer=%s, category=%s, price=$%.2f, delivery=%s)",
@@ -209,6 +291,9 @@ func (r *Runner) runOfferStatusLoop(ctx context.Context) error {
 	for {
 		if err := retryWithBackoff(ctx, r.log, 3, time.Second, r.handleOfferStatusOnce); err != nil {
 			r.log.Errorf("offer status loop error after retries: %v", err)
+			r.trackAuthError(ctx, err)
+		} else {
+			r.resetAuthFailCount()
 		}
 
 		select {
@@ -269,18 +354,25 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 		return
 	}
 
+	// Serialize: only one Chrome instance at a time — avoids VPS overload when multiple orders
+	r.chatMu.Lock()
+	defer r.chatMu.Unlock()
+
 	r.log.Infof("sending buyer auto-message for request %s...", requestID[:min(len(requestID), 12)])
 
 	conv, err := r.eld.CreateConversationForSeller(ctx, requestID)
 	if err != nil {
 		r.log.Errorf("create conversation failed (requestId=%s): %v", requestID, err)
+		r.trackMsgError(ctx, requestID, err)
 		return
 	}
 	r.log.Infof("conversation created (requestId=%s, talkJsId=%s)", requestID, conv.TalkJsConversationID)
 
 	if err := eldorado.SendChatMessage(ctx, requestID, r.cfg.BuyerAutoMessage, r.cfg.BuyerAutoImage, r.log); err != nil {
 		r.log.Errorf("send buyer message failed (requestId=%s): %v", requestID, err)
+		r.trackMsgError(ctx, requestID, err)
 		return
 	}
+	r.resetMsgFailCount()
 	r.log.Infof("buyer auto-message sent successfully (requestId=%s)", requestID[:min(len(requestID), 12)])
 }

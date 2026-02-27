@@ -46,7 +46,12 @@ func BrowserLogin(ctx context.Context, baseURL, email, password string, log *log
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	env := os.Environ()
+	env = append(env, "PYTHONUNBUFFERED=1")
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
+		env = append(env, "DISPLAY=:99")
+	}
+	cmd.Env = env
 
 	log.Infof("browser-login: launching patchright subprocess...")
 
@@ -113,7 +118,13 @@ func SendChatMessage(ctx context.Context, requestID, messageText, imagePath stri
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	env := os.Environ()
+	env = append(env, "PYTHONUNBUFFERED=1")
+	// VPS/xvfb: ensure DISPLAY is set for headless Chrome
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
+		env = append(env, "DISPLAY=:99")
+	}
+	cmd.Env = env
 
 	log.Infof("chat-message: sending to request %s...", requestID[:min(len(requestID), 12)])
 

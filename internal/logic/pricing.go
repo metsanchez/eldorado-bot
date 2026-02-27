@@ -29,7 +29,18 @@ var rankOrder = []string{
 	"Radiant",
 }
 
-const hoursPerDivision = 4
+// Hours per division by tier: Iron–Plat 4h, Ascendant+ 7h
+var hoursPerDivisionByTier = map[string]float64{
+	"iron": 4, "bronze": 4, "silver": 4, "gold": 4, "platinum": 4,
+	"diamond": 4, "ascendant": 7, "immortal": 7,
+}
+
+func hoursForDivision(rank string) float64 {
+	if h, ok := hoursPerDivisionByTier[rankTier(rank)]; ok {
+		return h
+	}
+	return 4
+}
 
 func rankIndex(rank string) int {
 	r := normalizeRank(rank)
@@ -81,29 +92,44 @@ func rankTier(rank string) string {
 	return ""
 }
 
-// Average RR gained per game by tier
-var rrPerGame = map[string]float64{
-	"iron": 22, "bronze": 22, "silver": 22, "gold": 22,
-	"platinum": 22, "diamond": 20, "ascendant": 18, "immortal": 17,
-}
-
-// Price charged per game by tier
-var pricePerGame = map[string]float64{
+// Point order price per tier (RR-based requests)
+var pointPrice = map[string]float64{
 	"iron": 1, "bronze": 1, "silver": 1, "gold": 2,
 	"platinum": 3, "diamond": 4, "ascendant": 5, "immortal": 10,
 }
 
-// divisionCostByRR calculates cost to gain rrNeeded RR at a given rank.
-// games = ceil(rrNeeded / rrPerGame), cost = games * pricePerGame
-func divisionCostByRR(rank string, rrNeeded float64) (float64, bool) {
-	tier := rankTier(rank)
-	rr, ok1 := rrPerGame[tier]
-	price, ok2 := pricePerGame[tier]
-	if !ok1 || !ok2 || rr <= 0 {
-		return 0, false
+// Flat price per division (from rank X to next division)
+var divisionPrice = map[string]float64{
+	"Iron I": 3, "Iron II": 3, "Iron III": 3,
+	"Bronze I": 3, "Bronze II": 3, "Bronze III": 3,
+	"Silver I": 3, "Silver II": 4, "Silver III": 4,
+	"Gold I": 4, "Gold II": 4, "Gold III": 4,
+	"Platinum I": 5, "Platinum II": 5, "Platinum III": 8,
+	"Diamond I": 10, "Diamond II": 10, "Diamond III": 11,
+	"Ascendant I": 15, "Ascendant II": 17, "Ascendant III": 19,
+	"Immortal I": 19, "Immortal II": 19, "Immortal III": 19,
+}
+
+// rrDiscountForFirstDivision returns discount $ for Diamond+ based on current RR (0-99).
+// Diamond: $1.5 per 25 RR, Ascendant: $2 per 25 RR, Immortal: $5 per 25 RR.
+func rrDiscountForFirstDivision(tier string, currentRR float64) float64 {
+	if currentRR <= 0 {
+		return 0
 	}
-	games := math.Ceil(rrNeeded / rr)
-	return games * price, true
+	var per25 float64
+	switch tier {
+	case "diamond":
+		per25 = 1.5
+	case "ascendant":
+		per25 = 2
+	case "immortal":
+		per25 = 5
+	default:
+		return 0
+	}
+	// Every full 25 RR block gives discount (25-49=1, 50-74=2, 75-99=3)
+	blocks := math.Floor(currentRR / 25)
+	return blocks * per25
 }
 
 // Net win prices per rank tier
@@ -154,7 +180,7 @@ func checkServerAndMethod(req *eldorado.BoostingRequestFull) (multiplier float64
 }
 
 // CalculateRankBoostPrice calculates total price for a rank boost from currentRank to desiredRank.
-// Delivery time = number of divisions * 4 hours.
+// Delivery time = sum of hours per division (Iron–Plat 4h, Ascendant+ 7h), mapped to Eldorado slots.
 func CalculateRankBoostPrice(req *eldorado.BoostingRequestFull) PriceResult {
 	multiplier, methodName, skipResult, ok := checkServerAndMethod(req)
 	if !ok {
@@ -197,28 +223,31 @@ func CalculateRankBoostPrice(req *eldorado.BoostingRequestFull) PriceResult {
 		}
 	}
 
-	divisions := toIdx - fromIdx
 	var totalPrice float64
 
-	// First division: only need (100 - currentRR) to rank up
-	firstDivRR := 100.0 - currentRR
-	cost, ok := divisionCostByRR(rankOrder[fromIdx], firstDivRR)
-	if !ok {
-		return PriceResult{Skip: true, SkipReason: "no RR pricing for: " + rankOrder[fromIdx]}
-	}
-	totalPrice += cost
-
-	// Subsequent divisions: full 100 RR each
-	for i := fromIdx + 1; i < toIdx; i++ {
-		cost, ok := divisionCostByRR(rankOrder[i], 100.0)
+	for i := fromIdx; i < toIdx; i++ {
+		cost, ok := divisionPrice[rankOrder[i]]
 		if !ok {
-			return PriceResult{Skip: true, SkipReason: "no RR pricing for: " + rankOrder[i]}
+			return PriceResult{Skip: true, SkipReason: "no price for division: " + rankOrder[i]}
+		}
+		// Diamond+: first division only — discount per 25 RR (Diamond $1.5, Ascendant $2, Immortal $5)
+		if i == fromIdx && currentRR > 0 {
+			tier := rankTier(rankOrder[i])
+			if disc := rrDiscountForFirstDivision(tier, currentRR); disc > 0 {
+				cost -= disc
+				if cost < 0 {
+					cost = 0
+				}
+			}
 		}
 		totalPrice += cost
 	}
 
 	totalPrice *= multiplier
-	totalHours := float64(divisions) * hoursPerDivision
+	var totalHours float64
+	for i := fromIdx; i < toIdx; i++ {
+		totalHours += hoursForDivision(rankOrder[i])
+	}
 	delivery := hoursToDeliveryTime(totalHours)
 
 	return PriceResult{Price: totalPrice, DeliveryTime: delivery, Method: methodName}
@@ -291,15 +320,16 @@ func CalculatePointPrice(req *eldorado.BoostingRequestFull) PriceResult {
 		}
 	}
 
-	price, ok2 := pricePerGame[tier]
+	price, ok2 := pointPrice[tier]
 	if !ok2 {
 		return PriceResult{Skip: true, SkipReason: "no point pricing for tier: " + tier}
 	}
-	delivery := hoursToDeliveryTime(hoursPerDivision)
+	delivery := hoursToDeliveryTime(hoursForDivision(currentRank))
 
 	return PriceResult{Price: price * multiplier, DeliveryTime: delivery, Method: methodName}
 }
 
+// hoursToDeliveryTime maps calculated hours to the nearest Eldorado slot (rounds up for safety)
 func hoursToDeliveryTime(hours float64) string {
 	switch {
 	case hours <= 1:
@@ -318,7 +348,13 @@ func hoursToDeliveryTime(hours float64) string {
 		return eldorado.DeliveryDay1
 	case hours <= 48:
 		return eldorado.DeliveryDay2
-	default:
+	case hours <= 72:
 		return eldorado.DeliveryDay3
+	case hours <= 168:
+		return eldorado.DeliveryDay7
+	case hours <= 336:
+		return eldorado.DeliveryDay14
+	default:
+		return eldorado.DeliveryDay28
 	}
 }

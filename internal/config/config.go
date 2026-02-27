@@ -60,7 +60,7 @@ func Load() (*Config, error) {
 		cfg.TelegramChatID = chatID
 	}
 
-	cfg.MinOfferPrice = getFloatOrDefault("MIN_OFFER_PRICE", 0)
+	cfg.MinOfferPrice = getFloatOrDefault("MIN_OFFER_PRICE", 5)
 	cfg.MaxOfferPrice = getFloatOrDefault("MAX_OFFER_PRICE", 0)
 	cfg.OfferMessage = getEnvOrDefault("OFFER_MESSAGE", "Merhaba, hızlı ve güvenli boost yapabilirim.")
 	cfg.DeliveryTime = getEnvOrDefault("DELIVERY_TIME", "Hour1")
