@@ -101,9 +101,11 @@ def main():
         # Send image first if provided
         if image_path:
             send_image(talkjs_frame, image_path, page)
+            # Even after successful image send, preview overlay can remain briefly.
+            close_upload_overlay(talkjs_frame, page)
 
         # Send text message
-        success = send_message(talkjs_frame, message_text)
+        success = send_message(talkjs_frame, message_text, page)
         if not success:
             print(json.dumps({"error": "could not send message - input not found"}))
             browser.close()
@@ -131,29 +133,7 @@ def find_talkjs_frame(page):
 
 
 def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
-    """Try direct chat URLs first, fallback to request page + click."""
-    if conversation_id:
-        candidate_urls = [
-            f"{base_url}/messages?conversationId={quote(conversation_id)}",
-            f"{base_url}/account/messages?conversationId={quote(conversation_id)}",
-            f"{base_url}/boosting-request/{request_id}?conversationId={quote(conversation_id)}",
-            f"{base_url}/boosting-request/{request_id}?openChat=1",
-        ]
-        for url in candidate_urls:
-            try:
-                log(f"trying direct chat URL: {url}")
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                wait_for_cloudflare(page, "direct-chat")
-                page.wait_for_timeout(2200)
-                log(f"page title: {page.title()}")
-                log(f"current URL: {page.url[:120]}")
-                frame = find_talkjs_frame(page)
-                if frame:
-                    log("direct chat path succeeded")
-                    return frame, "direct"
-            except Exception as e:
-                log(f"direct chat URL failed: {e}")
-
+    """Go to boosting-request page, click Chat with buyer. Most reliable path."""
     url = f"{base_url}/boosting-request/{request_id}"
     log(f"navigating to {url}")
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -201,8 +181,10 @@ def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
     return find_talkjs_frame(page), "fallback"
 
 
-def send_message(frame, text):
+def send_message(frame, text, page):
     """Set message via JavaScript (React-compatible, works on VPS/xvfb) and send."""
+    close_upload_overlay(frame, page)
+
     chat_input = None
     for selector in [
         '[placeholder="Say something..."]',
@@ -231,9 +213,10 @@ def send_message(frame, text):
     except Exception:
         pass
     try:
-        chat_input.click(timeout=1500)
-    except Exception as e:
-        log(f"chat input click skipped: {e}")
+        chat_input.click(timeout=800)
+    except Exception:
+        # Overlay races are common; focus + JS set below is usually enough.
+        pass
     frame.wait_for_timeout(250)
 
     # React-compatible: use native setter to bypass React's synthetic events (works on VPS/xvfb)
@@ -279,7 +262,7 @@ def send_message(frame, text):
     frame.wait_for_timeout(500)
 
     # Send: try Send button first (TalkJS may show it after text is entered)
-    for _ in range(3):
+    for _ in range(4):
         for send_selector in [
             'button:has-text("Send")',
             'button[type="submit"]',
@@ -289,10 +272,14 @@ def send_message(frame, text):
             try:
                 btn = frame.query_selector(send_selector)
                 if btn and btn.is_visible():
-                    btn.click()
+                    try:
+                        btn.click(timeout=1000)
+                    except Exception:
+                        btn.click(force=True, timeout=1000)
                     log(f"clicked Send: {send_selector}")
-                    frame.wait_for_timeout(1000)
-                    return True
+                    frame.wait_for_timeout(500)
+                    if was_message_likely_sent(chat_input, text):
+                        return True
             except Exception:
                 continue
         frame.wait_for_timeout(300)
@@ -312,7 +299,31 @@ def send_message(frame, text):
     except Exception as e:
         log(f"Enter fallback: {e}")
     frame.wait_for_timeout(600)
-    return True
+    return was_message_likely_sent(chat_input, text)
+
+
+def was_message_likely_sent(chat_input, original_text):
+    """Best-effort send verification: if input still contains full text, treat as unsent."""
+    try:
+        current = chat_input.evaluate(
+            """
+            (el) => {
+                const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                if (tag === 'textarea' || tag === 'input') return (el.value || '').trim();
+                if (el.isContentEditable) return (el.textContent || '').trim();
+                return (el.innerText || '').trim();
+            }
+            """
+        )
+    except Exception:
+        return True
+
+    src = (original_text or "").strip()
+    cur = (current or "").strip()
+    if not src:
+        return True
+    # If composer still holds almost all original content, send likely failed.
+    return not (cur and (cur == src or src.startswith(cur) or cur.startswith(src[: max(1, len(src) - 5)])))
 
 
 def send_image(frame, image_path, page):

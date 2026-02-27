@@ -21,9 +21,10 @@ type BrowserLoginResult struct {
 }
 
 type patchrightResult struct {
-	Cookies   string `json:"cookies"`
-	XSRFToken string `json:"xsrf_token"`
-	Error     string `json:"error"`
+	Cookies      string `json:"cookies"`
+	XSRFToken    string `json:"xsrf_token"`
+	TalkJsToken  string `json:"talkjs_token"`
+	Error        string `json:"error"`
 }
 
 var (
@@ -95,6 +96,7 @@ func BrowserLogin(ctx context.Context, baseURL, email, password string, log *log
 	}
 
 	log.Infof("browser-login: login successful! cookie length=%d", len(result.Cookies))
+	// Python script already saves TalkJS token to storage/talkjs_token.json
 
 	return &BrowserLoginResult{
 		CookieString: result.Cookies,

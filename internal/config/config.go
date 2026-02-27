@@ -28,8 +28,12 @@ type Config struct {
 	OfferMessage  string
 	DeliveryTime  string
 
-	BuyerAutoMessage string
+	BuyerAutoMessage  string
 	BuyerAutoImage   string
+
+	// TalkJS API (optional: enables curl-based message send, no browser)
+	TalkJsNymId  string // e.g. 1ae50f717a66884f2184_n
+	TalkJsToken  string // JWT from Eldorado; capture from browser Network tab when sending a message
 }
 
 func Load() (*Config, error) {
@@ -67,6 +71,9 @@ func Load() (*Config, error) {
 
 	cfg.BuyerAutoMessage = strings.ReplaceAll(getEnvOrDefault("BUYER_AUTO_MESSAGE", ""), `\n`, "\n")
 	cfg.BuyerAutoImage = getEnvOrDefault("BUYER_AUTO_IMAGE", "")
+
+	cfg.TalkJsNymId = getEnvOrDefault("TALKJS_NYM_ID", "")
+	cfg.TalkJsToken = getEnvOrDefault("TALKJS_TOKEN", "")
 
 	return cfg, nil
 }

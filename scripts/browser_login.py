@@ -4,6 +4,7 @@ Eldorado browser login helper using patchright (patched Playwright).
 Uses real Chrome (not Chromium) and handles Cloudflare Turnstile automatically.
 """
 
+import base64
 import json
 import os
 import sys
@@ -132,19 +133,75 @@ def main():
                 xsrf_val = part[len("XSRF-TOKEN="):]
                 log(f"XSRF-TOKEN from raw Cookie header: {xsrf_val[:40]}...")
 
+        # Step 11: Fetch TalkJS token (from messages/chat authorize API)
+        talkjs_token = ""
+        try:
+            log("fetching TalkJS token from Eldorado authorize...")
+            auth_result = page.evaluate("""
+                () => fetch('/api/conversations/me/authorize', {
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' }
+                }).then(r => r.json()).then(data => ({
+                    ok: true,
+                    token: data.token || data.jwt || data.Jwt || data.accessToken || data.talkJsToken
+                        || (data.data && (data.data.token || data.data.jwt))
+                        || (typeof data === 'string' ? data : null),
+                    raw: JSON.stringify(data).slice(0, 200)
+                })).catch(e => ({ ok: false, error: e.message }))
+            """)
+            if auth_result.get("ok") and auth_result.get("token"):
+                talkjs_token = auth_result["token"].strip()
+                log(f"TalkJS token fetched, len={len(talkjs_token)}")
+            else:
+                # Fallback: try alternate endpoints
+                for path in ["/api/users/me/talkJsToken", "/api/chat/talkJsToken"]:
+                    try:
+                        alt = page.evaluate(f"""
+                            () => fetch('{path}', {{ credentials: 'include', headers: {{ 'Accept': 'application/json' }} }})
+                                .then(r => r.json()).then(d => d.token || d.jwt || d.accessToken || null)
+                                .catch(() => null)
+                        """)
+                        if alt and len(str(alt)) > 50:
+                            talkjs_token = str(alt).strip()
+                            log(f"TalkJS token from {path}, len={len(talkjs_token)}")
+                            break
+                    except Exception:
+                        pass
+            if not talkjs_token:
+                log(f"TalkJS token not found (auth_result={auth_result})")
+        except Exception as e:
+            log(f"TalkJS token fetch failed: {e}")
+
         # Use the raw Cookie header from the browser - this is exactly what works
         result = {
             "cookies": raw_cookie,
             "xsrf_token": xsrf_from_cookie or raw_xsrf_header,
         }
+        if talkjs_token:
+            result["talkjs_token"] = talkjs_token
         log(f"login successful! cookie length={len(result['cookies'])}")
 
         # Save structured cookies for reuse by other scripts (e.g. send_chat_message.py)
-        cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "storage", "browser_cookies.json")
-        os.makedirs(os.path.dirname(cookies_file), exist_ok=True)
+        storage_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "storage")
+        os.makedirs(storage_dir, exist_ok=True)
+        cookies_file = os.path.join(storage_dir, "browser_cookies.json")
         with open(cookies_file, "w") as f:
             json.dump(cookies, f)
         log(f"saved {len(cookies)} cookies to {cookies_file}")
+
+        # Save TalkJS token for curl-based message send (auto-rotate on login)
+        if talkjs_token:
+            try:
+                payload_b64 = talkjs_token.split(".")[1]
+                payload_b64 += "=" * (4 - len(payload_b64) % 4) if len(payload_b64) % 4 else ""
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
+                exp = payload.get("exp", 0)
+            except Exception:
+                exp = int(time.time()) + 86400  # default 24h
+            token_file = os.path.join(storage_dir, "talkjs_token.json")
+            with open(token_file, "w") as f:
+                json.dump({"token": talkjs_token, "expires_at": exp}, f)
+            log(f"saved TalkJS token to {token_file} (exp={exp})")
 
         browser.close()
         print(json.dumps(result))

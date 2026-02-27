@@ -584,22 +584,21 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 
 func (r *Runner) buildBuyerAutoMessage(requestID string) string {
 	_ = requestID
-	lines := []string{
-		"Hi! I provide professional Valorant boosting services for all ranks.",
-		"✔ Free Stream and Agent selection",
-		"✔ 4+ Years of Boosting Experience",
-		"✔ Radiant Since Beta",
-		"✔ %100 Feedbacks",
-		"✔ High K/D & Consistent Performance",
-		"✔ 100% Legit – No Cheats or Third-Party Programs",
-		"✔ Offline Mode Available (Discreet Service)",
-		"✔ No Voice or Text Communication",
-		"",
-		"⭐ Free Stream",
-		"⭐ Free Agent Selection",
-		"⭐ Free Priority",
-	}
-	return strings.Join(lines, "\n")
+	// TalkJS list formatu: satır başında - * veya + ile madde işareti oluşur, satır sonları korunur
+	return `Hi! 👋 I provide professional Valorant boosting services for all ranks.
+
+- ✔ Free Stream and Agent selection
+- ✔ 4+ Years of Boosting Experience
+- ✔ Radiant Since Beta
+- ✔ 100% Feedbacks
+- ✔ High K/D & Consistent Performance
+- ✔ 100% Legit – No Cheats or Third-Party Programs
+- ✔ Offline Mode Available (Discreet Service)
+- ✔ No Voice or Text Communication
+
+- ⭐ Free Stream
+- ⭐ Free Agent Selection
+- ⭐ Free Priority`
 }
 
 func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
@@ -623,6 +622,63 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 		return
 	}
 	r.log.Infof("conversation created (requestId=%s, talkJsId=%s)", requestID, conv.TalkJsConversationID)
+
+	// Prefer TalkJS API (curl) when no image and token/nymId available
+	tryAPI := strings.TrimSpace(r.cfg.BuyerAutoImage) == "" && strings.TrimSpace(r.cfg.TalkJsNymId) != ""
+	if tryAPI {
+		token := eldorado.LoadTalkJsTokenFromStorage(r.log)
+		if token == "" {
+			token = strings.TrimSpace(r.cfg.TalkJsToken)
+		}
+		if token == "" {
+			if t, err := r.eld.TryGetTalkJsTokenForRequest(ctx, requestID); err == nil && t != "" {
+				token = t
+				eldorado.SaveTalkJsTokenToStorage(token, eldorado.JwtExp(token), r.log)
+			} else if t, err := r.eld.TryGetTalkJsToken(ctx); err == nil && t != "" {
+				token = t
+				eldorado.SaveTalkJsTokenToStorage(token, eldorado.JwtExp(token), r.log)
+			}
+		}
+		if token != "" {
+			// Kısa bekleme: yeni konuşma TalkJS'te senkronize olsun (500 hatası önlemi)
+			time.Sleep(3 * time.Second)
+
+			// oneOnOneId(buyer,seller) = TalkJS conv ID (20 hex). Try API ids first, then config nym.
+			buyerID := strings.TrimSpace(conv.BuyerUserID)
+			sellerID := strings.TrimSpace(conv.SellerUserID)
+			altID := eldorado.OneOnOneID(buyerID, r.cfg.TalkJsNymId)
+			if altID == "" && buyerID != "" && sellerID != "" {
+				altID = eldorado.OneOnOneID(buyerID, sellerID)
+			}
+			if altID == "" && buyerID != "" && !strings.HasSuffix(buyerID, "_n") {
+				altID = eldorado.OneOnOneID(buyerID+"_n", r.cfg.TalkJsNymId)
+			}
+			if altID != "" {
+				r.log.Infof("TalkJS oneOnOneId(buyer=%s,seller=%s)=%s", buyerID, sellerID, altID)
+			}
+			err := r.eld.TalkJsSayWithAlt(ctx, conv.TalkJsConversationID, altID, message, token, r.cfg.TalkJsNymId, r.log)
+			if err == nil {
+				r.storage.IncrementMessagesSent()
+				r.resetMsgFailCount()
+				r.log.Infof("buyer auto-message sent via API (requestId=%s)", requestID[:min(len(requestID), 12)])
+				return
+			}
+			if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403") {
+				eldorado.InvalidateTalkJsTokenStorage(r.log)
+				// retry once with fresh token from API
+				if t, e := r.eld.TryGetTalkJsToken(ctx); e == nil && t != "" {
+					eldorado.SaveTalkJsTokenToStorage(t, eldorado.JwtExp(t), r.log)
+					if r.eld.TalkJsSayWithAlt(ctx, conv.TalkJsConversationID, altID, message, t, r.cfg.TalkJsNymId, r.log) == nil {
+						r.storage.IncrementMessagesSent()
+						r.resetMsgFailCount()
+						r.log.Infof("buyer auto-message sent via API after token refresh (requestId=%s)", requestID[:min(len(requestID), 12)])
+						return
+					}
+				}
+			}
+			r.log.Infof("TalkJS API send failed, falling back to browser: %s", err.Error())
+		}
+	}
 
 	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, conv.TalkJsConversationID, r.log); err != nil {
 		r.log.Errorf("send buyer message failed (requestId=%s): %v", requestID, err)
