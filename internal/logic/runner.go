@@ -587,31 +587,24 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 
 func (r *Runner) buildBuyerAutoMessage(requestID string) string {
 	_ = requestID
-	// Düzenli mesaj formatı: bölümler arası çift satır sonu, madde işaretleri ile okunabilir yapı
-	return `Hi! 👋 I provide professional Valorant boosting services for all ranks.
+	// Örnek görsele göre: satır boşlukları, emoji maddeler, paragraf ayrımları
+	return `Hey! 👋 Radiant Top #2 player here.
 
 
-📋 WHAT I OFFER
-
-✓ Free Stream and Agent selection
-✓ 4+ Years of Boosting Experience
-✓ Radiant Since Beta
-✓ 100% Feedbacks
-✓ High K/D & Consistent Performance
+I personally handle every boost with the highest win rates and fastest completion on the platform.
 
 
-🛡️ LEGIT & DISCREET
-
-✓ 100% Legit – No Cheats or Third-Party Programs
-✓ Offline Mode Available (Discreet Service)
-✓ No Voice or Text Communication
+🏆 100% Win Rate Record
+⚡ Lightning-Fast Delivery
+🔒 Full Account Security (VPN + Offline Mode)
 
 
-⭐ EXTRAS INCLUDED
+✅ Free Live Stream
+✅ Free Agent Selection
+✅ Free Priority Queue
 
-⭐ Free Stream
-⭐ Free Agent Selection
-⭐ Free Priority`
+
+I treat every account like my own. Let's get you to your dream rank — fast, safe, and guaranteed. 💎`
 }
 
 func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {

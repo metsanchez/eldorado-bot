@@ -221,6 +221,7 @@ def send_message(frame, text, page):
     frame.wait_for_timeout(250)
 
     # React-compatible: use native setter to bypass React's synthetic events (works on VPS/xvfb)
+    # contenteditable'da \n görünmez; <br> ile satır sonları korunur
     def set_value_and_emit(element, value):
         try:
             return element.evaluate(
@@ -239,7 +240,8 @@ def send_message(frame, text, page):
                         el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     } else if (el.isContentEditable) {
-                        el.textContent = value;
+                        const escaped = (value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                        el.innerHTML = escaped.replace(/\\n/g, '<br>');
                         el.dispatchEvent(new InputEvent('input', { bubbles: true }));
                     }
                     return true;
