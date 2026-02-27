@@ -94,7 +94,7 @@ def main():
 
         wait_for_cloudflare(page, "request-detail")
 
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(3500)
         log(f"page title: {page.title()}")
         log(f"current URL: {page.url[:100]}")
 
@@ -117,7 +117,7 @@ def main():
             if chat_btn:
                 break
             log(f"waiting for chat button... ({attempt + 1}/15)")
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(1200)
 
         if not chat_btn:
             buttons = page.query_selector_all("button")
@@ -136,7 +136,7 @@ def main():
 
         chat_btn.click()
         log("clicked 'Chat with buyer'")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(2500)
 
         # Find TalkJS iframe and the chat input inside it
         talkjs_frame = find_talkjs_frame(page)
@@ -157,7 +157,7 @@ def main():
             browser.close()
             sys.exit(1)
 
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1200)
         log("message sent successfully")
         browser.close()
         print(json.dumps({"success": True, "request_id": request_id}))
@@ -172,7 +172,7 @@ def find_talkjs_frame(page):
                 log(f"found TalkJS frame: {frame.url[:80]}")
                 return frame
         log(f"waiting for TalkJS frame... ({attempt + 1}/10)")
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(700)
 
     log("TalkJS frame not found after 10 attempts")
     return None
@@ -203,7 +203,7 @@ def send_message(frame, text):
         return False
 
     chat_input.click()
-    frame.wait_for_timeout(600)
+    frame.wait_for_timeout(400)
 
     # React-compatible: use native setter to bypass React's synthetic events (works on VPS/xvfb)
     def set_value_and_emit(element, value):
@@ -245,7 +245,7 @@ def send_message(frame, text):
             log(f"fill failed: {e}")
             return False
 
-    frame.wait_for_timeout(800)
+    frame.wait_for_timeout(500)
 
     # Send: try Send button first (TalkJS may show it after text is entered)
     for _ in range(3):
@@ -260,11 +260,11 @@ def send_message(frame, text):
                 if btn and btn.is_visible():
                     btn.click()
                     log(f"clicked Send: {send_selector}")
-                    frame.wait_for_timeout(1500)
+                    frame.wait_for_timeout(1000)
                     return True
             except Exception:
                 continue
-        frame.wait_for_timeout(500)
+        frame.wait_for_timeout(300)
 
     # Fallback: dispatch Enter key via JavaScript (works when press() fails on headless)
     try:
@@ -280,7 +280,7 @@ def send_message(frame, text):
         chat_input.press("Enter")
     except Exception as e:
         log(f"Enter fallback: {e}")
-    frame.wait_for_timeout(1000)
+    frame.wait_for_timeout(600)
     return True
 
 
@@ -294,7 +294,7 @@ def send_image(frame, image_path, page):
             file_input = frame.query_selector('input[type="file"]')
             if file_input:
                 file_input.set_input_files(abs_path)
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(2000)
                 log("image selected via file input")
 
                 # After selecting a file, TalkJS shows a preview with "Send" button
@@ -331,7 +331,7 @@ def send_image(frame, image_path, page):
                         except Exception:
                             continue
 
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(1500)
                 if send_clicked:
                     log("image sent successfully")
                 else:
@@ -339,7 +339,7 @@ def send_image(frame, image_path, page):
                 return True
         except Exception as e:
             log(f"image upload attempt {attempt + 1}: {e}")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1500)
 
     log("WARNING: could not upload image after retries")
     return False
@@ -368,7 +368,7 @@ def wait_for_cloudflare(page, page_name, timeout=60):
                     pass
                 break
 
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1500)
 
 
 def log(msg):

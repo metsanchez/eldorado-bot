@@ -23,11 +23,27 @@ type TrackedOrder struct {
 	LastKnownStatus string             `json:"lastKnownStatus"`
 	TrackingStatus  TrackedOrderStatus `json:"trackingStatus"`
 	LastStatusCheck time.Time          `json:"lastStatusCheck"`
+	// Offer details for "Sipariş Atandı" notification
+	OfferPrice   float64 `json:"offerPrice,omitempty"`
+	CurrentRank  string  `json:"currentRank,omitempty"`
+	DesiredRank  string  `json:"desiredRank,omitempty"`
+	CurrentRR    string  `json:"currentRR,omitempty"`
+	CategoryTitle string `json:"categoryTitle,omitempty"`
+}
+
+// Stats holds bot statistics for /stats command.
+type Stats struct {
+	OffersCreated int       `json:"offersCreated"`
+	OffersWon     int       `json:"offersWon"`
+	OffersLost    int       `json:"offersLost"`
+	MessagesSent  int       `json:"messagesSent"`
+	LastUpdated   time.Time `json:"lastUpdated"`
 }
 
 type state struct {
-	SeenOrderIDs  map[string]bool        `json:"seenOrderIds"`
-	TrackedOrders map[string]TrackedOrder `json:"trackedOrders"`
+	SeenOrderIDs   map[string]bool        `json:"seenOrderIds"`
+	TrackedOrders  map[string]TrackedOrder `json:"trackedOrders"`
+	Stats          Stats                   `json:"stats"`
 }
 
 // JSONStorage is a simple JSON-file-based implementation for tracking orders.
@@ -120,14 +136,24 @@ func (s *JSONStorage) IsOrderSeen(orderID string) bool {
 
 // TrackOrder sets or updates tracked order info.
 func (s *JSONStorage) TrackOrder(orderID string, lastKnownStatus string, trackingStatus TrackedOrderStatus) error {
+	return s.TrackOrderWithDetails(orderID, lastKnownStatus, trackingStatus, 0, "", "", "", "")
+}
+
+// TrackOrderWithDetails sets tracked order with offer details for "Sipariş Atandı" notification.
+func (s *JSONStorage) TrackOrderWithDetails(orderID, lastKnownStatus string, trackingStatus TrackedOrderStatus, offerPrice float64, currentRank, desiredRank, currentRR, categoryTitle string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.state.TrackedOrders[orderID] = TrackedOrder{
-		OrderID:         orderID,
-		LastKnownStatus: lastKnownStatus,
-		TrackingStatus:  trackingStatus,
-		LastStatusCheck: time.Now(),
+		OrderID:          orderID,
+		LastKnownStatus:  lastKnownStatus,
+		TrackingStatus:   trackingStatus,
+		LastStatusCheck:  time.Now(),
+		OfferPrice:       offerPrice,
+		CurrentRank:      currentRank,
+		DesiredRank:      desiredRank,
+		CurrentRR:        currentRR,
+		CategoryTitle:    categoryTitle,
 	}
 	return s.persist()
 }
@@ -160,5 +186,48 @@ func (s *JSONStorage) ListTrackedOrdersByStatus(status TrackedOrderStatus) []Tra
 		}
 	}
 	return res
+}
+
+// IncrementOffersCreated increments the offers created counter.
+func (s *JSONStorage) IncrementOffersCreated() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Stats.OffersCreated++
+	s.state.Stats.LastUpdated = time.Now()
+	return s.persist()
+}
+
+// IncrementOffersWon increments the offers won counter.
+func (s *JSONStorage) IncrementOffersWon() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Stats.OffersWon++
+	s.state.Stats.LastUpdated = time.Now()
+	return s.persist()
+}
+
+// IncrementOffersLost increments the offers lost counter.
+func (s *JSONStorage) IncrementOffersLost() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Stats.OffersLost++
+	s.state.Stats.LastUpdated = time.Now()
+	return s.persist()
+}
+
+// IncrementMessagesSent increments the messages sent counter.
+func (s *JSONStorage) IncrementMessagesSent() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Stats.MessagesSent++
+	s.state.Stats.LastUpdated = time.Now()
+	return s.persist()
+}
+
+// GetStats returns a copy of the current stats.
+func (s *JSONStorage) GetStats() Stats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.Stats
 }
 

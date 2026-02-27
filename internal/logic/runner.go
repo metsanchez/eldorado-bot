@@ -28,6 +28,7 @@ type Runner struct {
 	tg      *telegram.Client
 	storage *storage.JSONStorage
 	chatMu  sync.Mutex // serialize buyer messages — only one Chrome at a time
+	msgWg   sync.WaitGroup // for graceful shutdown: wait for in-flight messages
 
 	// Critical error tracking
 	authFailMu    sync.Mutex
@@ -118,7 +119,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 
 	go func() {
 		if err := r.runBoostingRequestsLoop(ctx); err != nil {
@@ -132,11 +133,74 @@ func (r *Runner) Start(ctx context.Context) error {
 		}
 	}()
 
+	go r.runStatsCommandLoop(ctx)
+
 	select {
 	case <-ctx.Done():
+		r.log.Infof("shutdown requested, waiting for in-flight messages (max 90s)...")
+		done := make(chan struct{})
+		go func() {
+			r.msgWg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			r.log.Infof("all messages sent, shutdown complete")
+		case <-time.After(90 * time.Second):
+			r.log.Infof("shutdown timeout, exiting")
+		}
 		return nil
 	case err := <-errCh:
 		return err
+	}
+}
+
+func (r *Runner) runStatsCommandLoop(ctx context.Context) {
+	if r.cfg.TelegramBotToken == "" || r.cfg.TelegramChatID == 0 {
+		return
+	}
+	r.log.Infof("stats command listener started (/stats)")
+	var offset int
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		updates, err := r.tg.GetUpdates(ctx, offset)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		for _, u := range updates {
+			offset = u.UpdateID + 1
+			if u.Message == nil || u.Message.Chat == nil || u.Message.Text == "" {
+				continue
+			}
+			text := strings.TrimSpace(u.Message.Text)
+			if text != "/stats" {
+				continue
+			}
+			st := r.storage.GetStats()
+			winRate := 0.0
+			if st.OffersWon+st.OffersLost > 0 {
+				winRate = float64(st.OffersWon) / float64(st.OffersWon+st.OffersLost) * 100
+			}
+			msg := fmt.Sprintf(
+				"<b>📊 Bot İstatistikleri</b>\n\n"+
+					"Toplam teklif: <b>%d</b>\n"+
+					"Kazanılan: <b>%d</b>\n"+
+					"Kaybedilen: <b>%d</b>\n"+
+					"Kazanma oranı: <b>%.1f%%</b>\n"+
+					"Gönderilen mesaj: <b>%d</b>\n\n"+
+					"Son güncelleme: %s",
+				st.OffersCreated, st.OffersWon, st.OffersLost, winRate, st.MessagesSent,
+				st.LastUpdated.Format("02.01.2006 15:04"))
+
+			_ = r.tg.SendMessageToChat(ctx, u.Message.Chat.ID, msg)
+		}
 	}
 }
 
@@ -266,16 +330,29 @@ func (r *Runner) handleBoostingRequestsOnce(ctx context.Context) error {
 		} else if cat == eldorado.CategoryNetWins {
 			msg += fmt.Sprintf("\nRank: <b>%s</b> | Oyun: <b>%s</b>", detail.GetDescValue("Current season rank"), detail.GetDescValue("Number of games"))
 		}
+		if cat == eldorado.CategoryRankBoost || cat == eldorado.CategoryNetWins {
+			if rr := detail.GetDescValue("Current RR"); rr != "" {
+				msg += fmt.Sprintf("\nRR: <b>%s</b>", rr)
+			}
+		}
 		msg += fmt.Sprintf("\n\nID: <code>%s</code>", item.ID)
 		if err := r.tg.SendMessage(ctx, msg); err != nil {
 			r.log.Errorf("telegram send failed: %v", err)
 		}
 
-		if err := r.storage.TrackOrder(item.ID, "OfferSubmitted", storage.StatusOfferPending); err != nil {
+		detailRank := detail.GetDescValue("Current Rank")
+		detailDesired := detail.GetDescValue("Desired rank")
+		if detailRank == "" {
+			detailRank = detail.GetDescValue("Current season rank")
+		}
+		if err := r.storage.TrackOrderWithDetails(item.ID, "OfferSubmitted", storage.StatusOfferPending,
+			result.Price, detailRank, detailDesired, detail.GetDescValue("Current RR"), item.BoostingCategoryTitle); err != nil {
 			r.log.Errorf("track order failed (requestId=%s): %v", item.ID, err)
 		}
+		r.storage.IncrementOffersCreated()
 
 		// Create conversation and send auto-message to buyer
+		r.msgWg.Add(1)
 		go r.sendBuyerMessage(ctx, item.ID)
 	}
 
@@ -318,10 +395,16 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 		for _, tr := range tracked {
 			if tr.OrderID == item.ID {
 				r.log.Infof("offer WON for request %s (buyer=%s)!", item.ID, item.BuyerUsername)
-				r.tg.NotifyOrderAssigned(ctx, item.ID, item.BuyerUsername, item.BoostingCategoryTitle, item.GameID)
+				catTitle := tr.CategoryTitle
+				if catTitle == "" {
+					catTitle = item.BoostingCategoryTitle
+				}
+				r.tg.NotifyOrderAssignedWithDetails(ctx, item.ID, item.BuyerUsername, catTitle, item.GameID,
+					tr.OfferPrice, tr.CurrentRank, tr.DesiredRank, tr.CurrentRR)
 				if err := r.storage.UpdateTrackedOrderStatus(item.ID, "OfferWon", storage.StatusAssigned); err != nil {
 					r.log.Errorf("update tracked order failed (id=%s): %v", item.ID, err)
 				}
+				r.storage.IncrementOffersWon()
 				break
 			}
 		}
@@ -340,6 +423,7 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 				if err := r.storage.UpdateTrackedOrderStatus(item.ID, "OfferLost", storage.StatusClosed); err != nil {
 					r.log.Errorf("update tracked order failed (id=%s): %v", item.ID, err)
 				}
+				r.storage.IncrementOffersLost()
 				break
 			}
 		}
@@ -349,6 +433,7 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 }
 
 func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
+	defer r.msgWg.Done()
 	if r.cfg.BuyerAutoMessage == "" {
 		r.log.Infof("buyer auto-message skipped (no message configured)")
 		return
@@ -373,6 +458,7 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 		r.trackMsgError(ctx, requestID, err)
 		return
 	}
+	r.storage.IncrementMessagesSent()
 	r.resetMsgFailCount()
 	r.log.Infof("buyer auto-message sent successfully (requestId=%s)", requestID[:min(len(requestID), 12)])
 }
