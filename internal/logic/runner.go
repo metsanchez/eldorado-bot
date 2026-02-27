@@ -583,38 +583,7 @@ func (r *Runner) handleOfferStatusOnce(ctx context.Context) error {
 }
 
 func (r *Runner) buildBuyerAutoMessage(requestID string) string {
-	tr, ok := r.storage.GetTrackedOrder(requestID)
-	if !ok {
-		return r.cfg.BuyerAutoMessage
-	}
-
-	if strings.TrimSpace(r.cfg.BuyerAutoMessage) != "" {
-		msg := strings.ReplaceAll(r.cfg.BuyerAutoMessage, "{current_rank}", tr.CurrentRank)
-		msg = strings.ReplaceAll(msg, "{desired_rank}", tr.DesiredRank)
-		msg = strings.ReplaceAll(msg, "{rr}", tr.CurrentRR)
-		msg = strings.ReplaceAll(msg, "{category}", tr.CategoryTitle)
-		msg = strings.ReplaceAll(msg, "{price}", fmt.Sprintf("$%.2f", tr.OfferPrice))
-		return msg
-	}
-
-	if tr.CategoryTitle == "" {
-		tr.CategoryTitle = "Valorant Boost"
-	}
-
-	detailLine := ""
-	if tr.CurrentRank != "" && tr.DesiredRank != "" {
-		detailLine = fmt.Sprintf("🎯 %s ➜ %s", tr.CurrentRank, tr.DesiredRank)
-	} else if tr.CurrentRank != "" {
-		detailLine = fmt.Sprintf("🎯 Current Rank: %s", tr.CurrentRank)
-	}
-	if tr.CurrentRR != "" {
-		if detailLine == "" {
-			detailLine = fmt.Sprintf("📈 Current RR: %s", tr.CurrentRR)
-		} else {
-			detailLine += fmt.Sprintf(" | RR: %s", tr.CurrentRR)
-		}
-	}
-
+	_ = requestID
 	lines := []string{
 		"Hi! I provide professional Valorant boosting services for all ranks.",
 		"✔ Free Stream and Agent selection",
@@ -630,23 +599,11 @@ func (r *Runner) buildBuyerAutoMessage(requestID string) string {
 		"⭐ Free Agent Selection",
 		"⭐ Free Priority",
 	}
-	if detailLine != "" {
-		lines = append(lines, "", detailLine)
-	}
-	lines = append(lines, fmt.Sprintf("Service: %s", tr.CategoryTitle), fmt.Sprintf("Price: $%.2f", tr.OfferPrice))
-
 	return strings.Join(lines, "\n")
 }
 
 func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 	defer r.msgWg.Done()
-	if strings.TrimSpace(r.cfg.BuyerAutoMessage) == "" {
-		if _, ok := r.storage.GetTrackedOrder(requestID); !ok {
-			r.log.Infof("buyer auto-message skipped (no message configured)")
-			return
-		}
-	}
-
 	message := r.buildBuyerAutoMessage(requestID)
 	if strings.TrimSpace(message) == "" {
 		r.log.Infof("buyer auto-message skipped (no message configured)")

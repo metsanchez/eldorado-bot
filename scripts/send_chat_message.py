@@ -328,47 +328,14 @@ def send_image(frame, image_path, page):
                 page.wait_for_timeout(2000)
                 log("image selected via file input")
 
-                # After selecting a file, TalkJS shows a preview with "Send" button
-                send_clicked = False
-                for sel in [
-                    'button:has-text("Send")',
-                    'button[type="submit"]',
-                    '[data-testid="send-button"]',
-                ]:
-                    try:
-                        # Check both iframe and main page for the Send button
-                        btn = frame.query_selector(sel)
-                        if btn and btn.is_visible():
-                            btn.click()
-                            send_clicked = True
-                            log(f"clicked Send button in iframe: {sel}")
-                            break
-                    except Exception:
-                        continue
-
-                if not send_clicked:
-                    # Send button might be on the main page (outside iframe)
-                    for sel in [
-                        'button:has-text("Send")',
-                        'button[type="submit"]:visible',
-                    ]:
-                        try:
-                            btn = page.query_selector(sel)
-                            if btn and btn.is_visible():
-                                btn.click()
-                                send_clicked = True
-                                log(f"clicked Send button on page: {sel}")
-                                break
-                        except Exception:
-                            continue
-
+                send_clicked = click_image_send(frame, page)
                 page.wait_for_timeout(1500)
                 if send_clicked:
                     log("image sent successfully")
-                else:
-                    log("WARNING: Send button not found, image may not be sent")
-                    close_upload_overlay(frame, page)
-                return True
+                    return True
+
+                log("WARNING: image send action not confirmed, retrying...")
+                close_upload_overlay(frame, page)
         except Exception as e:
             log(f"image upload attempt {attempt + 1}: {e}")
         page.wait_for_timeout(1500)
@@ -402,6 +369,80 @@ def close_upload_overlay(frame, page):
                 return
         except Exception:
             continue
+
+
+def click_image_send(frame, page):
+    """Try multiple strategies to click TalkJS upload preview send action."""
+    selectors = [
+        'button:has-text("Send")',
+        'button[type="submit"]',
+        '[data-testid="send-button"]',
+        '[aria-label="Send"]',
+        '.send-row button',
+        '[class*="send-row"] button',
+    ]
+
+    for sel in selectors:
+        for scope_name, scope in [("iframe", frame), ("page", page)]:
+            try:
+                btn = scope.query_selector(sel)
+                if btn and btn.is_visible():
+                    try:
+                        btn.click(timeout=1200)
+                    except Exception:
+                        btn.click(force=True, timeout=1200)
+                    log(f"clicked image Send ({scope_name}): {sel}")
+                    return True
+            except Exception:
+                continue
+
+    # JS fallback: click any visible button/link with "send" text inside upload overlay.
+    for scope_name, scope in [("iframe", frame), ("page", page)]:
+        try:
+            clicked = scope.evaluate(
+                """
+                () => {
+                    const roots = Array.from(document.querySelectorAll('.AttachOverlay, [class*="UploadPreview"], [class*="attach"]'));
+                    const candidates = [];
+                    const pushIfVisible = (el) => {
+                        if (!el) return;
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0) candidates.push(el);
+                    };
+                    for (const root of roots) {
+                        root.querySelectorAll('button, a, [role="button"]').forEach(pushIfVisible);
+                    }
+                    for (const el of candidates) {
+                        const txt = (el.textContent || '').trim().toLowerCase();
+                        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                        if (txt.includes('send') || aria.includes('send')) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                """
+            )
+            if clicked:
+                log(f"clicked image Send (JS {scope_name})")
+                return True
+        except Exception:
+            continue
+
+    # Last fallback: Enter key often triggers preview send.
+    try:
+        frame.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        return True
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        return True
+    except Exception:
+        return False
 
 
 def wait_for_cloudflare(page, page_name, timeout=60):
