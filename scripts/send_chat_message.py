@@ -10,13 +10,14 @@ Flow:
   4. Type and send the message
 
 Usage:
-  send_chat_message.py <boosting_request_id> <message_text> [image_path]
+  send_chat_message.py <boosting_request_id> <message_text> [image_path] [talkjs_conversation_id]
 """
 
 import json
 import os
 import sys
 import time
+from urllib.parse import quote
 
 from patchright.sync_api import sync_playwright
 
@@ -27,12 +28,13 @@ COOKIES_FILE = os.path.join(
 
 def main():
     if len(sys.argv) < 3:
-        print(json.dumps({"error": "Usage: send_chat_message.py <request_id> <message> [image_path]"}))
+        print(json.dumps({"error": "Usage: send_chat_message.py <request_id> <message> [image_path] [conversation_id]"}))
         sys.exit(1)
 
     request_id = sys.argv[1]
     message_text = sys.argv[2]
-    image_path = sys.argv[3] if len(sys.argv) > 3 else None
+    image_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+    conversation_id = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
 
     if image_path and not os.path.isfile(image_path):
         log(f"WARNING: image file not found: {image_path}")
@@ -88,58 +90,8 @@ def main():
 
         page = context.new_page()
 
-        url = f"https://www.eldorado.gg/boosting-request/{request_id}"
-        log(f"navigating to {url}")
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-
-        wait_for_cloudflare(page, "request-detail")
-
-        page.wait_for_timeout(3500)
-        log(f"page title: {page.title()}")
-        log(f"current URL: {page.url[:100]}")
-
-        # Wait for Angular SPA to render the page content
-        chat_btn = None
-        for attempt in range(15):
-            for selector in [
-                'button:has-text("Chat with buyer")',
-                'text="Chat with buyer"',
-                'button:has-text("Chat")',
-            ]:
-                try:
-                    el = page.query_selector(selector)
-                    if el and el.is_visible():
-                        chat_btn = el
-                        log(f"found chat button: {selector}")
-                        break
-                except Exception:
-                    continue
-            if chat_btn:
-                break
-            log(f"waiting for chat button... ({attempt + 1}/15)")
-            page.wait_for_timeout(1200)
-
-        if not chat_btn:
-            buttons = page.query_selector_all("button")
-            btn_texts = []
-            for b in buttons[:20]:
-                try:
-                    txt = b.inner_text()
-                    if txt.strip():
-                        btn_texts.append(txt.strip()[:50])
-                except Exception:
-                    pass
-            log(f"ERROR: 'Chat with buyer' not found. Buttons on page: {btn_texts}")
-            print(json.dumps({"error": "Chat with buyer button not found", "url": page.url[:200], "buttons": btn_texts}))
-            browser.close()
-            sys.exit(1)
-
-        chat_btn.click()
-        log("clicked 'Chat with buyer'")
-        page.wait_for_timeout(2500)
-
-        # Find TalkJS iframe and the chat input inside it
-        talkjs_frame = find_talkjs_frame(page)
+        base_url = os.environ.get("ELDORADO_BASE_URL", "https://www.eldorado.gg").rstrip("/")
+        talkjs_frame, route = open_chat_with_direct_first(page, base_url, request_id, conversation_id)
         if not talkjs_frame:
             log("ERROR: TalkJS iframe not found")
             print(json.dumps({"error": "TalkJS chat iframe not found"}))
@@ -160,7 +112,7 @@ def main():
         page.wait_for_timeout(1200)
         log("message sent successfully")
         browser.close()
-        print(json.dumps({"success": True, "request_id": request_id}))
+        print(json.dumps({"success": True, "request_id": request_id, "route": route}))
 
 
 def find_talkjs_frame(page):
@@ -176,6 +128,77 @@ def find_talkjs_frame(page):
 
     log("TalkJS frame not found after 10 attempts")
     return None
+
+
+def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
+    """Try direct chat URLs first, fallback to request page + click."""
+    if conversation_id:
+        candidate_urls = [
+            f"{base_url}/messages?conversationId={quote(conversation_id)}",
+            f"{base_url}/account/messages?conversationId={quote(conversation_id)}",
+            f"{base_url}/boosting-request/{request_id}?conversationId={quote(conversation_id)}",
+            f"{base_url}/boosting-request/{request_id}?openChat=1",
+        ]
+        for url in candidate_urls:
+            try:
+                log(f"trying direct chat URL: {url}")
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                wait_for_cloudflare(page, "direct-chat")
+                page.wait_for_timeout(2200)
+                log(f"page title: {page.title()}")
+                log(f"current URL: {page.url[:120]}")
+                frame = find_talkjs_frame(page)
+                if frame:
+                    log("direct chat path succeeded")
+                    return frame, "direct"
+            except Exception as e:
+                log(f"direct chat URL failed: {e}")
+
+    url = f"{base_url}/boosting-request/{request_id}"
+    log(f"navigating to {url}")
+    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    wait_for_cloudflare(page, "request-detail")
+    page.wait_for_timeout(3500)
+    log(f"page title: {page.title()}")
+    log(f"current URL: {page.url[:100]}")
+
+    chat_btn = None
+    for attempt in range(15):
+        for selector in [
+            'button:has-text("Chat with buyer")',
+            'text="Chat with buyer"',
+            'button:has-text("Chat")',
+        ]:
+            try:
+                el = page.query_selector(selector)
+                if el and el.is_visible():
+                    chat_btn = el
+                    log(f"found chat button: {selector}")
+                    break
+            except Exception:
+                continue
+        if chat_btn:
+            break
+        log(f"waiting for chat button... ({attempt + 1}/15)")
+        page.wait_for_timeout(1200)
+
+    if not chat_btn:
+        buttons = page.query_selector_all("button")
+        btn_texts = []
+        for b in buttons[:20]:
+            try:
+                txt = b.inner_text()
+                if txt.strip():
+                    btn_texts.append(txt.strip()[:50])
+            except Exception:
+                pass
+        log(f"ERROR: 'Chat with buyer' not found. Buttons on page: {btn_texts}")
+        return None, "fallback"
+
+    chat_btn.click()
+    log("clicked 'Chat with buyer'")
+    page.wait_for_timeout(2500)
+    return find_talkjs_frame(page), "fallback"
 
 
 def send_message(frame, text):
@@ -202,8 +225,16 @@ def send_message(frame, text):
         log("ERROR: chat input not found in TalkJS frame")
         return False
 
-    chat_input.click()
-    frame.wait_for_timeout(400)
+    # Preview overlays can intercept pointer events; prefer JS focus first.
+    try:
+        chat_input.evaluate("(el) => el.focus()")
+    except Exception:
+        pass
+    try:
+        chat_input.click(timeout=1500)
+    except Exception as e:
+        log(f"chat input click skipped: {e}")
+    frame.wait_for_timeout(250)
 
     # React-compatible: use native setter to bypass React's synthetic events (works on VPS/xvfb)
     def set_value_and_emit(element, value):
@@ -336,6 +367,7 @@ def send_image(frame, image_path, page):
                     log("image sent successfully")
                 else:
                     log("WARNING: Send button not found, image may not be sent")
+                    close_upload_overlay(frame, page)
                 return True
         except Exception as e:
             log(f"image upload attempt {attempt + 1}: {e}")
@@ -343,6 +375,33 @@ def send_image(frame, image_path, page):
 
     log("WARNING: could not upload image after retries")
     return False
+
+
+def close_upload_overlay(frame, page):
+    """Try to close TalkJS upload preview overlay so input is clickable again."""
+    for _ in range(2):
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(250)
+        except Exception:
+            pass
+
+    for sel in [
+        'button[aria-label*="Close"]',
+        'button[title*="Close"]',
+        'button:has-text("Cancel")',
+        '[data-testid*="close"]',
+        '[class*="close"]',
+    ]:
+        try:
+            btn = frame.query_selector(sel)
+            if btn and btn.is_visible():
+                btn.click(timeout=1000)
+                page.wait_for_timeout(250)
+                log(f"closed upload overlay: {sel}")
+                return
+        except Exception:
+            continue
 
 
 def wait_for_cloudflare(page, page_name, timeout=60):

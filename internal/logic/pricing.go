@@ -169,14 +169,17 @@ func checkServerAndMethod(req *eldorado.BoostingRequestFull) (multiplier float64
 	if method == "" {
 		method = strings.TrimSpace(req.GetDescValue("completion method"))
 	}
-	method = strings.ToLower(method)
+	method = strings.ToLower(strings.TrimSpace(method))
 
 	switch method {
 	case "duo":
 		return 2, "Duo", PriceResult{}, true
-	default:
-		return 1, "Solo", PriceResult{}, true
 	}
+	// Be tolerant to API text variants like "Duo Boost", "Duo Queue", etc.
+	if strings.Contains(method, "duo") {
+		return 2, "Duo", PriceResult{}, true
+	}
+	return 1, "Solo", PriceResult{}, true
 }
 
 // CalculateRankBoostPrice calculates total price for a rank boost from currentRank to desiredRank.

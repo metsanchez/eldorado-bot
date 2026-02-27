@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"eldorado-bot/internal/logger"
 )
@@ -24,6 +25,12 @@ type patchrightResult struct {
 	XSRFToken string `json:"xsrf_token"`
 	Error     string `json:"error"`
 }
+
+var (
+	chatRouteMu       sync.Mutex
+	chatDirectCount   int
+	chatFallbackCount int
+)
 
 // BrowserLogin calls the patchright-based Python helper script to perform
 // login. Patchright patches the browser to bypass Cloudflare Turnstile detection
@@ -96,7 +103,7 @@ func BrowserLogin(ctx context.Context, baseURL, email, password string, log *log
 }
 
 // SendChatMessage launches a browser to send a message to a buyer on a boosting request.
-func SendChatMessage(ctx context.Context, requestID, messageText, imagePath string, log *logger.Logger) error {
+func SendChatMessage(ctx context.Context, requestID, messageText, imagePath, talkJsConversationID string, log *logger.Logger) error {
 	scriptPath := findScript("send_chat_message.py")
 	if scriptPath == "" {
 		return fmt.Errorf("send_chat_message.py script not found")
@@ -111,7 +118,10 @@ func SendChatMessage(ctx context.Context, requestID, messageText, imagePath stri
 				absImage = filepath.Join(wd, imagePath)
 			}
 		}
-		args = append(args, absImage)
+		args = append(args, absImage, talkJsConversationID)
+	} else if talkJsConversationID != "" {
+		// Keep positional args stable for the python script.
+		args = append(args, "", talkJsConversationID)
 	}
 
 	cmd := exec.CommandContext(ctx, pythonBin, args...)
@@ -146,6 +156,7 @@ func SendChatMessage(ctx context.Context, requestID, messageText, imagePath stri
 	var result struct {
 		Success bool   `json:"success"`
 		Error   string `json:"error"`
+		Route   string `json:"route"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		return fmt.Errorf("parse chat result: %w (raw: %s)", err, truncateStr(stdout.String(), 200))
@@ -154,8 +165,24 @@ func SendChatMessage(ctx context.Context, requestID, messageText, imagePath stri
 		return fmt.Errorf("chat message error: %s", result.Error)
 	}
 
-	log.Infof("chat-message: sent successfully")
+	route := strings.ToLower(strings.TrimSpace(result.Route))
+	if route == "" {
+		route = "fallback"
+	}
+	direct, fallback := incrementChatRouteCounter(route)
+	log.Infof("chat-message: sent successfully (route=%s, route-counts direct=%d fallback=%d)", route, direct, fallback)
 	return nil
+}
+
+func incrementChatRouteCounter(route string) (direct int, fallback int) {
+	chatRouteMu.Lock()
+	defer chatRouteMu.Unlock()
+	if route == "direct" {
+		chatDirectCount++
+	} else {
+		chatFallbackCount++
+	}
+	return chatDirectCount, chatFallbackCount
 }
 
 func findScript(name string) string {

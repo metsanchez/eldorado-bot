@@ -667,7 +667,7 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 	}
 	r.log.Infof("conversation created (requestId=%s, talkJsId=%s)", requestID, conv.TalkJsConversationID)
 
-	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, r.log); err != nil {
+	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, conv.TalkJsConversationID, r.log); err != nil {
 		r.log.Errorf("send buyer message failed (requestId=%s): %v", requestID, err)
 		r.trackMsgError(ctx, requestID, err)
 		return
