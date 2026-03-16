@@ -17,6 +17,7 @@ pgrep -f 'go run.*cmd/bot' | while read pid; do
 done
 pkill -9 -f "browser_login.py" 2>/dev/null
 pkill -9 -f "send_chat_message.py" 2>/dev/null
+pkill -9 -f "chat_server.py" 2>/dev/null
 pkill -9 -f "patchright/driver" 2>/dev/null
 pkill -9 -f "playwright_chromiumdev" 2>/dev/null
 sleep 2
@@ -24,5 +25,17 @@ sleep 2
 echo "Building..."
 go build -o eldorado-bot ./cmd/bot/ || exit 1
 
+echo "Starting chat server (persistent browser)..."
+python3 scripts/chat_server.py &
+CHAT_SERVER_PID=$!
+cleanup_chat_server() { kill $CHAT_SERVER_PID 2>/dev/null || true; }
+trap cleanup_chat_server EXIT
+sleep 3
+if kill -0 $CHAT_SERVER_PID 2>/dev/null; then
+  echo "Chat server started (PID $CHAT_SERVER_PID)"
+else
+  echo "WARNING: Chat server failed to start, will use script fallback per message"
+fi
+
 echo "Starting bot..."
-exec ./eldorado-bot
+./eldorado-bot

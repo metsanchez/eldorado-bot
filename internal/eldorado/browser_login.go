@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"eldorado-bot/internal/logger"
 )
@@ -104,8 +106,76 @@ func BrowserLogin(ctx context.Context, baseURL, email, password string, log *log
 	}, nil
 }
 
-// SendChatMessage launches a browser to send a message to a buyer on a boosting request.
-func SendChatMessage(ctx context.Context, requestID, messageText, imagePath, talkJsConversationID string, log *logger.Logger) error {
+// SendChatMessage sends a message via chat server (if running) or falls back to launching browser per message.
+func SendChatMessage(ctx context.Context, requestID, messageText, imagePath, talkJsConversationID, baseURL, chatServerURL string, log *logger.Logger) error {
+	if chatServerURL != "" {
+		if err := sendViaChatServer(ctx, requestID, messageText, imagePath, talkJsConversationID, baseURL, chatServerURL, log); err == nil {
+			return nil
+		}
+		log.Infof("chat-message: server unavailable, falling back to script")
+	}
+
+	return sendViaScript(ctx, requestID, messageText, imagePath, talkJsConversationID, log)
+}
+
+func sendViaChatServer(ctx context.Context, requestID, messageText, imagePath, talkJsConversationID, baseURL, chatServerURL string, log *logger.Logger) error {
+	body := map[string]any{
+		"request_id": requestID,
+		"message":    messageText,
+		"base_url":   baseURL,
+	}
+	if imagePath != "" {
+		absImage := imagePath
+		if !filepath.IsAbs(imagePath) {
+			if wd, err := os.Getwd(); err == nil {
+				absImage = filepath.Join(wd, imagePath)
+			}
+		}
+		body["image_path"] = absImage
+	}
+	if talkJsConversationID != "" {
+		body["conversation_id"] = talkJsConversationID
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimSuffix(chatServerURL, "/")+"/send", bytes.NewReader(jsonBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+		Route   string `json:"route"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if !result.Success && result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+	if !result.Success {
+		return fmt.Errorf("send failed")
+	}
+
+	route := strings.ToLower(strings.TrimSpace(result.Route))
+	if route == "" {
+		route = "fallback"
+	}
+	direct, fallback := incrementChatRouteCounter(route)
+	log.Infof("chat-message: sent via server (route=%s, route-counts direct=%d fallback=%d)", route, direct, fallback)
+	return nil
+}
+
+func sendViaScript(ctx context.Context, requestID, messageText, imagePath, talkJsConversationID string, log *logger.Logger) error {
 	scriptPath := findScript("send_chat_message.py")
 	if scriptPath == "" {
 		return fmt.Errorf("send_chat_message.py script not found")
@@ -122,7 +192,6 @@ func SendChatMessage(ctx context.Context, requestID, messageText, imagePath, tal
 		}
 		args = append(args, absImage, talkJsConversationID)
 	} else if talkJsConversationID != "" {
-		// Keep positional args stable for the python script.
 		args = append(args, "", talkJsConversationID)
 	}
 
@@ -172,7 +241,7 @@ func SendChatMessage(ctx context.Context, requestID, messageText, imagePath, tal
 		route = "fallback"
 	}
 	direct, fallback := incrementChatRouteCounter(route)
-	log.Infof("chat-message: sent successfully (route=%s, route-counts direct=%d fallback=%d)", route, direct, fallback)
+	log.Infof("chat-message: sent via script (route=%s, route-counts direct=%d fallback=%d)", route, direct, fallback)
 	return nil
 }
 

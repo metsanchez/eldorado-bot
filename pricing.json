@@ -1,0 +1,31 @@
+{
+  "division_price": {
+    "Iron I": 3, "Iron II": 3, "Iron III": 3,
+    "Bronze I": 3, "Bronze II": 3, "Bronze III": 3,
+    "Silver I": 3, "Silver II": 4, "Silver III": 4,
+    "Gold I": 4, "Gold II": 4, "Gold III": 4,
+    "Platinum I": 5, "Platinum II": 5, "Platinum III": 8,
+    "Diamond I": 10, "Diamond II": 10, "Diamond III": 11,
+    "Ascendant I": 15, "Ascendant II": 17, "Ascendant III": 19,
+    "Immortal I": 33, "Immortal II": 65, "Immortal III": 50
+  },
+  "net_win_price": {
+    "iron": 5, "bronze": 5, "silver": 5, "gold": 5,
+    "platinum": 5, "diamond": 5, "ascendant": 8, "immortal": 11
+  },
+  "net_win_override": {
+    "Immortal I": 11,
+    "Ascendant I": 8, "Ascendant II": 8, "Ascendant III": 8
+  },
+  "point_price": {
+    "iron": 1, "bronze": 1, "silver": 1, "gold": 2,
+    "platinum": 3, "diamond": 4, "ascendant": 5, "immortal": 10
+  },
+  "rr_discount_per_25": {
+    "diamond": 1.5, "ascendant": 2, "immortal": 5
+  },
+  "hours_per_division": {
+    "iron": 4, "bronze": 4, "silver": 4, "gold": 4, "platinum": 4,
+    "diamond": 4, "ascendant": 7, "immortal": 24
+  }
+}

@@ -51,13 +51,13 @@ def main():
             except Exception:
                 page.locator("text=Log in").first.click(timeout=5000)
 
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2500)
         log("current URL: " + page.url[:120])
 
         # Step 3: Handle Cloudflare Turnstile on login.eldorado.gg
         wait_for_cloudflare(page, "login page", timeout=90)
 
-        # Step 4: Wait for login form
+        # Step 4: Wait for login form (form hazır olana kadar bekle)
         log("waiting for login form")
         form_found = wait_for_form(page)
         if not form_found:
@@ -65,27 +65,29 @@ def main():
             print(json.dumps({"error": "login form not found after 60s"}))
             sys.exit(1)
 
+        page.wait_for_timeout(400)
         # Step 5: Fill email only (Cognito two-step: email first, then password)
         log("filling email")
         fill_email(page, email)
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(400)
 
         # Step 6: Submit email form
         log("submitting email")
         submit_form(page)
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2500)
 
         # Step 7: Wait for password page (verifyPassword)
         log("waiting for password page")
         wait_for_password_page(page)
 
+        page.wait_for_timeout(300)
         # Step 8: Fill password and submit
         log("filling password")
         fill_password(page, password)
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(400)
         log("submitting password")
         submit_form(page)
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(4500)
 
         # Step 9: Wait for auth cookies
         log("waiting for auth cookies")
@@ -310,7 +312,7 @@ def wait_for_form(page):
                 log(f"found login form via: {sel}")
                 return True
         log(f"waiting for login form... ({attempt+1}/30)")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1500)
     return False
 
 
@@ -349,7 +351,7 @@ def wait_for_password_page(page):
                 pass
 
         log(f"waiting for password page... ({attempt+1}/20)")
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1200)
     raise Exception("password page did not load within 30s")
 
 

@@ -17,8 +17,10 @@ type Config struct {
 
 	ValorantGameID string
 
-	PollIntervalOpenOrders  time.Duration
-	PollIntervalOrderStatus time.Duration
+	PollIntervalOpenOrders     time.Duration
+	PollIntervalOrderStatus    time.Duration
+	PollIntervalBuyerReply     time.Duration
+	PollIntervalPricingReload  time.Duration
 
 	TelegramBotToken string
 	TelegramChatID   int64
@@ -34,6 +36,12 @@ type Config struct {
 	// TalkJS API (optional: enables curl-based message send, no browser)
 	TalkJsNymId  string // e.g. 1ae50f717a66884f2184_n
 	TalkJsToken  string // JWT from Eldorado; capture from browser Network tab when sending a message
+
+	// Fiyatlandırma: pricing.json dosya yolu (boş=pricing.json)
+	PricingPath string
+
+	// Chat server: persistent browser, paralel mesaj. Boşsa her mesajda yeni browser.
+	ChatServerURL string
 }
 
 func Load() (*Config, error) {
@@ -53,6 +61,8 @@ func Load() (*Config, error) {
 
 	cfg.PollIntervalOpenOrders = getDurationOrDefault("POLL_INTERVAL_OPEN_ORDERS", 10*time.Second)
 	cfg.PollIntervalOrderStatus = getDurationOrDefault("POLL_INTERVAL_ORDER_STATUS", 10*time.Second)
+	cfg.PollIntervalBuyerReply = getDurationOrDefault("POLL_INTERVAL_BUYER_REPLY", 10*time.Second)
+	cfg.PollIntervalPricingReload = getDurationOrDefault("POLL_INTERVAL_PRICING_RELOAD", 15*time.Second)
 
 	cfg.TelegramBotToken = getEnvOrDefault("TELEGRAM_BOT_TOKEN", "")
 	chatIDStr := getEnvOrDefault("TELEGRAM_CHAT_ID", "0")
@@ -74,6 +84,12 @@ func Load() (*Config, error) {
 
 	cfg.TalkJsNymId = getEnvOrDefault("TALKJS_NYM_ID", "")
 	cfg.TalkJsToken = getEnvOrDefault("TALKJS_TOKEN", "")
+
+	cfg.PricingPath = getEnvOrDefault("PRICING_PATH", "pricing.json")
+	cfg.ChatServerURL = getEnvOrDefault("CHAT_SERVER_URL", "http://127.0.0.1:38521")
+	if cfg.ChatServerURL == "off" || cfg.ChatServerURL == "none" || cfg.ChatServerURL == "disabled" {
+		cfg.ChatServerURL = ""
+	}
 
 	return cfg, nil
 }

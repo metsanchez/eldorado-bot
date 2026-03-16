@@ -29,6 +29,7 @@ type Runner struct {
 	eld     *eldorado.Client
 	tg      *telegram.Client
 	storage *storage.JSONStorage
+	pricing *PriceManager
 	chatMu  sync.Mutex     // serialize buyer messages — only one Chrome at a time
 	msgWg   sync.WaitGroup // for graceful shutdown: wait for in-flight messages
 	sumMu   sync.Mutex
@@ -57,12 +58,17 @@ func NewRunner(
 	tgClient *telegram.Client,
 	st *storage.JSONStorage,
 ) *Runner {
+	pricingPath := "pricing.json"
+	if cfg != nil && cfg.PricingPath != "" {
+		pricingPath = cfg.PricingPath
+	}
 	return &Runner{
 		log:     log,
 		cfg:     cfg,
 		eld:     eldClient,
 		tg:      tgClient,
 		storage: st,
+		pricing: NewPriceManager(pricingPath, log),
 		sumData: offerSummaryData{
 			ByCategory: make(map[string]int),
 		},
@@ -149,6 +155,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	go r.runStatsCommandLoop(ctx)
 	go r.runOfferSummaryLoop(ctx)
 	go r.runBuyerReplyNotifyLoop(ctx)
+	go r.runPricingReloadLoop(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -299,14 +306,37 @@ func (r *Runner) runOfferSummaryLoop(ctx context.Context) {
 	}
 }
 
+func (r *Runner) runPricingReloadLoop(ctx context.Context) {
+	interval := r.cfg.PollIntervalPricingReload
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	r.log.Infof("pricing reload loop started (interval=%s)", interval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.pricing.Load()
+		}
+	}
+}
+
 func (r *Runner) runBuyerReplyNotifyLoop(ctx context.Context) {
 	if r.cfg.TelegramBotToken == "" || r.cfg.TelegramChatID == 0 {
 		return
 	}
 
-	ticker := time.NewTicker(30 * time.Second)
+	interval := r.cfg.PollIntervalBuyerReply
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	r.log.Infof("buyer reply notify loop started (interval=30s)")
+	r.log.Infof("buyer reply notify loop started (interval=%s)", interval)
 
 	for {
 		select {
@@ -321,6 +351,11 @@ func (r *Runner) runBuyerReplyNotifyLoop(ctx context.Context) {
 }
 
 func (r *Runner) checkBuyerRepliesOnce(ctx context.Context) error {
+	// Bekleyen teklif yoksa API çağrısı atlama (gereksiz yük önleme)
+	if len(r.storage.ListTrackedOrdersByStatus(storage.StatusOfferPending)) == 0 {
+		return nil
+	}
+
 	page, err := r.eld.ListReceivedBoostingRequests(ctx, eldorado.FilterOfferSubmitted, r.cfg.ValorantGameID)
 	if err != nil {
 		return err
@@ -435,12 +470,13 @@ func (r *Runner) handleBoostingRequestsOnce(ctx context.Context) error {
 			continue
 		}
 
+		priceCfg := r.pricing.Get()
 		var result PriceResult
 		switch cat {
 		case eldorado.CategoryRankBoost:
-			result = CalculateRankBoostPrice(detail)
+			result = CalculateRankBoostPrice(priceCfg, detail)
 		case eldorado.CategoryNetWins:
-			result = CalculateNetWinPrice(detail)
+			result = CalculateNetWinPrice(priceCfg, detail)
 		}
 
 		if result.Skip {
@@ -629,7 +665,7 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 	}
 	r.log.Infof("conversation created (requestId=%s, talkJsId=%s)", requestID, conv.TalkJsConversationID)
 
-	// Prefer TalkJS API (curl) when no image and token/nymId available
+	// TalkJS API sadece görsel YOKSA dene (görsel varsa browser kullan)
 	tryAPI := strings.TrimSpace(r.cfg.BuyerAutoImage) == "" && strings.TrimSpace(r.cfg.TalkJsNymId) != ""
 	if tryAPI {
 		token := eldorado.LoadTalkJsTokenFromStorage(r.log)
@@ -646,10 +682,8 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 			}
 		}
 		if token != "" {
-			// Kısa bekleme: yeni konuşma TalkJS'te senkronize olsun (500 hatası önlemi)
 			time.Sleep(3 * time.Second)
 
-			// oneOnOneId(buyer,seller) = TalkJS conv ID (20 hex). Try API ids first, then config nym.
 			buyerID := strings.TrimSpace(conv.BuyerUserID)
 			sellerID := strings.TrimSpace(conv.SellerUserID)
 			altID := eldorado.OneOnOneID(buyerID, r.cfg.TalkJsNymId)
@@ -671,7 +705,6 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 			}
 			if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403") {
 				eldorado.InvalidateTalkJsTokenStorage(r.log)
-				// retry once with fresh token from API
 				if t, e := r.eld.TryGetTalkJsToken(ctx); e == nil && t != "" {
 					eldorado.SaveTalkJsTokenToStorage(t, eldorado.JwtExp(t), r.log)
 					if r.eld.TalkJsSayWithAlt(ctx, conv.TalkJsConversationID, altID, message, t, r.cfg.TalkJsNymId, r.log) == nil {
@@ -686,7 +719,7 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 		}
 	}
 
-	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, conv.TalkJsConversationID, r.log); err != nil {
+	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, conv.TalkJsConversationID, r.cfg.EldoradoBaseURL, r.cfg.ChatServerURL, r.log); err != nil {
 		r.log.Errorf("send buyer message failed (requestId=%s): %v", requestID, err)
 		r.trackMsgError(ctx, requestID, err)
 		return
