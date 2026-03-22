@@ -1,5 +1,7 @@
 package eldorado
 
+import "strings"
+
 // --- Boosting Request Listing ---
 
 type BoostingRequestListItem struct {
@@ -52,17 +54,42 @@ type BoostingRequestFull struct {
 	AvailableSellersCount  int                     `json:"availableSellersCount"`
 }
 
-// Helper to extract a description value by label
+// Helper to extract a description value by label (case-insensitive; Eldorado API label casing may vary)
 func (r *BoostingRequestFull) GetDescValue(label string) string {
+	return r.getDescValueByLabels(label)
+}
+
+// GetDescValueMulti returns value for the first matching label (tries each in order)
+func (r *BoostingRequestFull) GetDescValueMulti(labels ...string) string {
+	return r.getDescValueByLabels(labels...)
+}
+
+// getDescValueByLabels returns value for the first matching label
+func (r *BoostingRequestFull) getDescValueByLabels(labels ...string) string {
 	if r.BoostingRequestDetails == nil {
 		return ""
 	}
-	for _, dv := range r.BoostingRequestDetails.DescriptionValues {
-		if dv.Label == label {
-			return dv.Value
+	for _, label := range labels {
+		labelNorm := strings.ToLower(strings.TrimSpace(label))
+		for _, dv := range r.BoostingRequestDetails.DescriptionValues {
+			if strings.ToLower(strings.TrimSpace(dv.Label)) == labelNorm && dv.Value != "" {
+				return dv.Value
+			}
 		}
 	}
 	return ""
+}
+
+// GetAllDescLabels returns all label names from the request (for debugging)
+func (r *BoostingRequestFull) GetAllDescLabels() []string {
+	if r.BoostingRequestDetails == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.BoostingRequestDetails.DescriptionValues))
+	for _, dv := range r.BoostingRequestDetails.DescriptionValues {
+		out = append(out, dv.Label+"="+dv.Value)
+	}
+	return out
 }
 
 // --- Create Boosting Offer ---

@@ -118,19 +118,15 @@ func netWinPriceForRank(cfg *PriceConfig, rank string) float64 {
 
 // checkServerAndMethod validates server=EU and returns the duo multiplier (1 for Solo, 2 for Duo).
 func checkServerAndMethod(req *eldorado.BoostingRequestFull) (multiplier float64, methodName string, skip PriceResult, ok bool) {
-	server := strings.TrimSpace(req.GetDescValue("Server"))
+	server := strings.TrimSpace(req.GetDescValueMulti("Server", "server", "Region"))
 	if server == "" {
-		server = strings.TrimSpace(req.GetDescValue("server"))
+		return 0, "", PriceResult{Skip: true, SkipReason: "missing server/region info"}, false
 	}
 	if !strings.EqualFold(server, "EU") {
 		return 0, "", PriceResult{Skip: true, SkipReason: "non-EU server: " + server}, false
 	}
 
-	method := strings.TrimSpace(req.GetDescValue("Completion Method"))
-	if method == "" {
-		method = strings.TrimSpace(req.GetDescValue("completion method"))
-	}
-	method = strings.ToLower(strings.TrimSpace(method))
+	method := strings.ToLower(strings.TrimSpace(req.GetDescValueMulti("Completion Method", "completion method", "Method")))
 
 	switch method {
 	case "duo":
@@ -151,9 +147,9 @@ func CalculateRankBoostPrice(cfg *PriceConfig, req *eldorado.BoostingRequestFull
 		return skipResult
 	}
 
-	currentRank := normalizeRank(req.GetDescValue("Current Rank"))
-	desiredRank := normalizeRank(req.GetDescValue("Desired rank"))
-	currentRRStr := req.GetDescValue("Current RR")
+	currentRank := normalizeRank(req.GetDescValueMulti("Current Rank", "From Rank", "Current rank"))
+	desiredRank := normalizeRank(req.GetDescValueMulti("Desired rank", "Desired Rank", "To Rank", "Target rank"))
+	currentRRStr := req.GetDescValueMulti("Current RR", "Current rr", "RR")
 
 	if currentRank == "" || desiredRank == "" {
 		return PriceResult{Skip: true, SkipReason: "missing rank info"}
@@ -231,18 +227,15 @@ func CalculateNetWinPrice(cfg *PriceConfig, req *eldorado.BoostingRequestFull) P
 		return skipResult
 	}
 
-	currentRank := normalizeRank(req.GetDescValue("Current season rank"))
-	if currentRank == "" {
-		currentRank = normalizeRank(req.GetDescValue("Current Rank"))
-	}
-	numGamesStr := req.GetDescValue("Number of games")
+	currentRank := normalizeRank(req.GetDescValueMulti("Current season rank", "Current Rank", "From Rank"))
+	numGamesStr := req.GetDescValueMulti("Number of games", "Number Of Games", "Games")
 
 	if currentRank == "" {
 		return PriceResult{Skip: true, SkipReason: "missing rank for net win"}
 	}
 
 	if rankTier(currentRank) == "immortal" {
-		rrStr := req.GetDescValue("Current RR")
+		rrStr := req.GetDescValueMulti("Current RR", "Current rr", "RR")
 		rr, _ := strconv.Atoi(rrStr)
 		if rr >= 300 {
 			return PriceResult{Skip: true, SkipReason: "Immortal 300+ skip"}
@@ -269,10 +262,7 @@ func CalculatePointPrice(cfg *PriceConfig, req *eldorado.BoostingRequestFull) Pr
 		return skipResult
 	}
 
-	currentRank := normalizeRank(req.GetDescValue("Current season rank"))
-	if currentRank == "" {
-		currentRank = normalizeRank(req.GetDescValue("Current Rank"))
-	}
+	currentRank := normalizeRank(req.GetDescValueMulti("Current season rank", "Current Rank", "From Rank"))
 
 	if currentRank == "" {
 		return PriceResult{Skip: true, SkipReason: "missing rank for points"}
@@ -281,7 +271,7 @@ func CalculatePointPrice(cfg *PriceConfig, req *eldorado.BoostingRequestFull) Pr
 	tier := rankTier(currentRank)
 
 	if tier == "immortal" {
-		rrStr := req.GetDescValue("Current RR")
+		rrStr := req.GetDescValueMulti("Current RR", "Current rr", "RR")
 		rr, _ := strconv.Atoi(rrStr)
 		if rr >= 300 {
 			return PriceResult{Skip: true, SkipReason: "Immortal 300+ skip"}

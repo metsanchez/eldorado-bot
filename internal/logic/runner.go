@@ -482,6 +482,12 @@ func (r *Runner) handleBoostingRequestsOnce(ctx context.Context) error {
 		if result.Skip {
 			r.log.Infof("skipping request %s: %s (buyer=%s, category=%s)",
 				item.ID, result.SkipReason, item.BuyerUsername, item.BoostingCategoryTitle)
+			if result.SkipReason == "missing rank info" || strings.Contains(result.SkipReason, "unknown rank") {
+				labels := detail.GetAllDescLabels()
+				if len(labels) > 0 {
+					r.log.Infof("  API labels (request %s): %v", item.ID, labels)
+				}
+			}
 			continue
 		}
 
