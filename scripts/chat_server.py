@@ -104,6 +104,34 @@ def cleanup_loop():
             log(f"cleanup error: {e}")
 
 
+last_cookie_mtime = 0
+last_cookie_mtime_lock = threading.Lock()
+
+
+def _reload_cookies_if_changed():
+    """Reload cookies from file if the file was modified since last load."""
+    global context, last_cookie_mtime
+    if not context:
+        return
+    try:
+        cookie_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "storage", "browser_cookies.json"
+        )
+        if not os.path.isfile(cookie_path):
+            return
+        mtime = os.path.getmtime(cookie_path)
+        with last_cookie_mtime_lock:
+            if mtime <= last_cookie_mtime:
+                return
+            last_cookie_mtime = mtime
+        cookies = load_cookies()
+        if cookies:
+            context.add_cookies(cookies)
+            log(f"reloaded {len(cookies)} cookies from file (file changed)")
+    except Exception as e:
+        log(f"cookie reload error: {e}")
+
+
 def handle_send(body):
     """Process a single send request. Returns (success, result_dict)."""
     global context
@@ -127,6 +155,8 @@ def handle_send(body):
 
     if not context:
         return False, {"error": "browser not ready"}
+
+    _reload_cookies_if_changed()
 
     with semaphore:
         page = None

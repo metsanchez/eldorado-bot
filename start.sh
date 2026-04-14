@@ -23,7 +23,7 @@ pkill -9 -f "playwright_chromiumdev" 2>/dev/null
 sleep 2
 
 echo "Building..."
-go build -o eldorado-bot ./cmd/bot/ || exit 1
+go build -o eldobot ./cmd/bot/ || exit 1
 
 echo "Starting chat server (persistent browser)..."
 python3 scripts/chat_server.py &
@@ -38,4 +38,4 @@ else
 fi
 
 echo "Starting bot..."
-./eldorado-bot
+./eldobot
