@@ -725,12 +725,25 @@ func (r *Runner) sendBuyerMessage(ctx context.Context, requestID string) {
 		}
 	}
 
-	if err := eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, conv.TalkJsConversationID, r.cfg.EldoradoBaseURL, r.cfg.ChatServerURL, r.log); err != nil {
-		r.log.Errorf("send buyer message failed (requestId=%s): %v", requestID, err)
-		r.trackMsgError(ctx, requestID, err)
-		return
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			delay := time.Duration(attempt*10) * time.Second
+			r.log.Infof("retrying buyer message (attempt %d/3) in %s (requestId=%s)", attempt, delay, requestID[:min(len(requestID), 12)])
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+		lastErr = eldorado.SendChatMessage(ctx, requestID, message, r.cfg.BuyerAutoImage, conv.TalkJsConversationID, r.cfg.EldoradoBaseURL, r.cfg.ChatServerURL, r.log)
+		if lastErr == nil {
+			r.storage.IncrementMessagesSent()
+			r.resetMsgFailCount()
+			r.log.Infof("buyer auto-message sent successfully (requestId=%s)", requestID[:min(len(requestID), 12)])
+			return
+		}
+		r.log.Errorf("send buyer message failed (attempt %d/3, requestId=%s): %v", attempt, requestID, lastErr)
 	}
-	r.storage.IncrementMessagesSent()
-	r.resetMsgFailCount()
-	r.log.Infof("buyer auto-message sent successfully (requestId=%s)", requestID[:min(len(requestID), 12)])
+	r.trackMsgError(ctx, requestID, lastErr)
 }

@@ -80,18 +80,19 @@ def load_cookies():
     return valid_cookies
 
 
-def find_talkjs_frame(page):
-    """Find the TalkJS chat iframe."""
-    for attempt in range(10):
+def find_talkjs_frame(page, max_attempts=20, interval_ms=1000):
+    """Find the TalkJS chat iframe with generous wait."""
+    for attempt in range(max_attempts):
         for frame in page.frames:
             frame_url = frame.url.lower()
             if "talkjs" in frame_url or "chatbox" in frame_url:
                 log(f"found TalkJS frame: {frame.url[:80]}")
                 return frame
-        log(f"waiting for TalkJS frame... ({attempt + 1}/10)")
-        page.wait_for_timeout(500)
+        if attempt < max_attempts - 1:
+            log(f"waiting for TalkJS frame... ({attempt + 1}/{max_attempts})")
+            page.wait_for_timeout(interval_ms)
 
-    log("TalkJS frame not found after 10 attempts")
+    log(f"TalkJS frame not found after {max_attempts} attempts")
     return None
 
 
@@ -121,6 +122,15 @@ def wait_for_cloudflare(page, page_name, timeout=60):
         page.wait_for_timeout(1500)
 
 
+def _is_auth_redirect(page):
+    """Detect if page redirected to login/auth-callback."""
+    try:
+        url = page.url.lower()
+        return any(kw in url for kw in ["auth-callback", "login.eldorado", "oauth2/authorize"])
+    except Exception:
+        return False
+
+
 def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
     """Go to boosting-request page, click Chat with buyer. Most reliable path."""
     url = f"{base_url}/boosting-request/{request_id}"
@@ -131,8 +141,20 @@ def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
     log(f"page title: {page.title()}")
     log(f"current URL: {page.url[:100]}")
 
+    if _is_auth_redirect(page):
+        log("detected auth redirect, cookies may be expired. Waiting for redirect to complete...")
+        page.wait_for_timeout(5000)
+        if _is_auth_redirect(page):
+            log("still on auth page, retrying navigation...")
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            wait_for_cloudflare(page, "request-detail-retry")
+            page.wait_for_timeout(3000)
+            if _is_auth_redirect(page):
+                log("ERROR: auth redirect persists, cookies are expired")
+                return None, "fallback"
+
     chat_btn = None
-    for attempt in range(15):
+    for attempt in range(20):
         for selector in [
             'button:has-text("Chat with buyer")',
             'text="Chat with buyer"',
@@ -148,8 +170,14 @@ def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
                 continue
         if chat_btn:
             break
-        log(f"waiting for chat button... ({attempt + 1}/15)")
-        page.wait_for_timeout(800)
+        if attempt == 10:
+            log("chat button not found after 10 tries, reloading page...")
+            page.reload(wait_until="domcontentloaded", timeout=30000)
+            wait_for_cloudflare(page, "request-detail-reload")
+            page.wait_for_timeout(2500)
+        else:
+            log(f"waiting for chat button... ({attempt + 1}/20)")
+            page.wait_for_timeout(1000)
 
     if not chat_btn:
         buttons = page.query_selector_all("button")
@@ -166,7 +194,7 @@ def open_chat_with_direct_first(page, base_url, request_id, conversation_id):
 
     chat_btn.click()
     log("clicked 'Chat with buyer'")
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(3000)
     return find_talkjs_frame(page), "fallback"
 
 
@@ -415,22 +443,35 @@ def send_image(frame, image_path, page):
 
     for attempt in range(5):
         try:
-            file_input = frame.query_selector('input[type="file"]')
+            current_frame = frame
+            try:
+                _ = current_frame.url
+            except Exception:
+                log(f"frame detached before attempt {attempt + 1}, re-finding...")
+                current_frame = find_talkjs_frame(page, max_attempts=10, interval_ms=800)
+                if not current_frame:
+                    log("could not re-find TalkJS frame for image upload")
+                    return False
+
+            file_input = current_frame.query_selector('input[type="file"]')
             if file_input:
                 file_input.set_input_files(abs_path)
-                page.wait_for_timeout(3200)
+                page.wait_for_timeout(3500)
                 log("image selected via file input")
 
-                send_clicked = click_image_send(frame, page)
-                page.wait_for_timeout(1800)
+                send_clicked = click_image_send(current_frame, page)
+                page.wait_for_timeout(2500)
                 if send_clicked:
                     log("image sent successfully")
                     return True
 
                 log("WARNING: image send action not confirmed, retrying...")
-                close_upload_overlay(frame, page)
+                close_upload_overlay(current_frame, page)
         except Exception as e:
-            log(f"image upload attempt {attempt + 1}: {e}")
+            if "detached" in str(e).lower():
+                log(f"frame detached during image upload (attempt {attempt + 1}), will re-find")
+            else:
+                log(f"image upload attempt {attempt + 1}: {e}")
         page.wait_for_timeout(1500)
 
     log("WARNING: could not upload image after retries")
@@ -456,10 +497,36 @@ def send_chat_message_impl(page, request_id, message_text, image_path, conversat
                     os.remove(optimized)
                 except Exception:
                     pass
-        close_upload_overlay(talkjs_frame, page)
-        page.wait_for_timeout(1000)
+
+        page.wait_for_timeout(2000)
+
+        # After image send, TalkJS iframe often reloads — must re-find frame
+        frame_ok = False
+        try:
+            _ = talkjs_frame.url
+            frame_ok = True
+        except Exception:
+            frame_ok = False
+
+        if not frame_ok:
+            log("TalkJS frame detached after image send, re-finding...")
+            talkjs_frame = find_talkjs_frame(page, max_attempts=15, interval_ms=1000)
+            if not talkjs_frame:
+                log("ERROR: could not re-find TalkJS frame after image send")
+                return False, route, "TalkJS frame lost after image send"
+        else:
+            close_upload_overlay(talkjs_frame, page)
+            page.wait_for_timeout(500)
 
     success = send_message(talkjs_frame, message_text, page)
+    if not success:
+        # Last resort: re-find frame and retry once
+        log("message send failed, retrying with fresh frame...")
+        page.wait_for_timeout(2000)
+        talkjs_frame = find_talkjs_frame(page, max_attempts=10, interval_ms=1000)
+        if talkjs_frame:
+            success = send_message(talkjs_frame, message_text, page)
+
     if not success:
         return False, route, "could not send message - input not found"
 
