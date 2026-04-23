@@ -57,7 +57,11 @@ def main():
         log("current URL: " + page.url[:120])
 
         # Step 3: Handle Cloudflare Turnstile on login.eldorado.gg
-        wait_for_cloudflare(page, "login page", timeout=90)
+        login_cf_timeout = 90
+        env_cf = os.environ.get("CLOUDFLARE_LOGIN_TIMEOUT", "").strip()
+        if env_cf.isdigit():
+            login_cf_timeout = max(60, min(600, int(env_cf)))
+        wait_for_cloudflare(page, "login page", timeout=login_cf_timeout)
 
         # Step 4: Wait for login form (form hazır olana kadar bekle)
         log("waiting for login form")
@@ -211,12 +215,54 @@ def main():
         print(json.dumps(result))
 
 
+def _title_suggests_cloudflare_challenge(title_lower: str) -> bool:
+    """Heuristic for Cloudflare / Turnstile interstitial titles (avoid bare 'cloudflare' substring)."""
+    t = (title_lower or "").strip()
+    if t == "cloudflare":
+        return True
+    keywords = (
+        "just a moment",
+        "bir dakika",
+        "attention required",
+        "| cloudflare",
+        "cloudflare ray id",
+        "checking your browser",
+        "verify you are human",
+        " by cloudflare",
+        "protected by cloudflare",
+    )
+    return any(kw in title_lower for kw in keywords)
+
+
+def _login_form_visible(page):
+    """True if Cognito email step is already on the page (challenge may be gone)."""
+    for sel in (
+        'input[name="username"]',
+        'input[id="signInFormUsername"]',
+        'input[name="email"]',
+        'input[type="email"]',
+    ):
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def wait_for_cloudflare(page, page_name, timeout=90):
     """Wait for Cloudflare challenge, clicking Turnstile checkbox if present."""
     deadline = time.time() + timeout
-    turnstile_clicked = False
+    last_turnstile_attempt = 0.0
+    turnstile_retry_s = 14.0
+    first_turnstile_attempt = True
 
     while time.time() < deadline:
+        if _login_form_visible(page):
+            log(f"login form visible on {page_name}; treating Cloudflare as passed")
+            return
+
         try:
             title = page.title().lower()
         except Exception:
@@ -228,21 +274,25 @@ def wait_for_cloudflare(page, page_name, timeout=90):
                 pass
             continue
 
-        is_challenge = any(kw in title for kw in [
-            "just a moment", "bir dakika", "attention required", "cloudflare",
-        ])
+        is_challenge = _title_suggests_cloudflare_challenge(title)
 
         if not is_challenge:
             log(f"Cloudflare passed on {page_name} (title: {page.title()[:60]})")
             return
 
-        # Try to find and click the Turnstile checkbox in the iframe
-        if not turnstile_clicked:
-            turnstile_clicked = try_click_turnstile(page)
-            if turnstile_clicked:
-                # After clicking, wait for the page to navigate
-                page.wait_for_timeout(5000)
-                continue
+        now = time.time()
+        due = first_turnstile_attempt or (now - last_turnstile_attempt >= turnstile_retry_s)
+        if due:
+            first_turnstile_attempt = False
+            last_turnstile_attempt = now
+            if try_click_turnstile(page):
+                log("Turnstile click dispatched, waiting for page update...")
+            page.wait_for_timeout(4000)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            continue
 
         remaining = int(deadline - time.time())
         log(f"Cloudflare challenge on {page_name}... remaining: {remaining}s")
@@ -401,7 +451,7 @@ def wait_for_auth_cookies(context, page):
         # Check for Cloudflare challenge on current page
         try:
             title = page.title().lower()
-            if any(kw in title for kw in ["just a moment", "bir dakika", "cloudflare"]):
+            if _title_suggests_cloudflare_challenge(title):
                 log(f"Cloudflare challenge detected at {current_url}, trying to solve...")
                 try_click_turnstile(page)
                 page.wait_for_timeout(5000)
