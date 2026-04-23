@@ -26,7 +26,7 @@ bir Go botunun iskeletini içerir.
 2. Binary derle:
 
 ```bash
-go build -o eldorado-bot ./cmd/bot
+go build -buildvcs=false -o eldorado-bot ./cmd/bot
 ```
 
 3. Botu çalıştır:

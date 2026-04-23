@@ -204,8 +204,8 @@ Bu komut:
 ### Yöntem 2: Manuel
 
 ```bash
-# Derleme
-go build -o eldorado-bot ./cmd/bot/
+# Derleme (-buildvcs=false: çok kullanıcılı VPS'te git damgası hatasını önler)
+go build -buildvcs=false -o eldorado-bot ./cmd/bot/
 
 # Çalıştırma
 ./eldorado-bot
@@ -396,7 +396,7 @@ Eldorado Boyt/
 | Komut | Açıklama |
 |-------|----------|
 | `./start.sh` | Botu derle ve başlat (eski süreçleri öldürür) |
-| `go build -o eldorado-bot ./cmd/bot/` | Sadece derle |
+| `go build -buildvcs=false -o eldorado-bot ./cmd/bot/` | Sadece derle |
 | `./eldorado-bot` | Derlenmiş botu çalıştır |
 | `pkill -f eldorado-bot` | Botu durdur |
 | `cat storage.json \| python3 -m json.tool` | Görülen siparişleri göster |
@@ -446,6 +446,16 @@ Masaüstünde yine de sanal ekran istiyorsanız: `ELDORADO_XVFB=1 ./start.sh`
 ### "either ELDORADO_COOKIES or both ELDORADO_EMAIL+ELDORADO_PASSWORD must be set"
 
 `.env` dosyasında `ELDORADO_EMAIL` ve `ELDORADO_PASSWORD` alanlarının dolu olduğundan emin olun.
+
+### `error obtaining VCS status: exit status 128`
+
+Proje dizini başka bir kullanıcıya (ör. `root`) aitken `mika` ile `./start.sh` veya `go build` çalıştırıldığında git bilgisi okunamaz. `./start.sh` zaten `-buildvcs=false` kullanır. Manuel derleme:
+
+```bash
+go build -buildvcs=false -o eldorado-bot ./cmd/bot/
+```
+
+Alternatif: dizin sahipliğini düzeltin (`chown -R mika:mika /etc/eldo/eldorado-bot`) veya `git config --global --add safe.directory /etc/eldo/eldorado-bot`.
 
 ### Chrome penceresi açılıyor ama login olmuyor
 

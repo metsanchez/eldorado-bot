@@ -31,7 +31,8 @@ pkill -9 -f "playwright_chromiumdev" 2>/dev/null
 sleep 2
 
 echo "Building..."
-go build -o eldorado-bot ./cmd/bot/ || exit 1
+# -buildvcs=false: root başka kullanıcıya ait .git veya safe.directory yoksa VCS damgası exit 128 verir
+go build -buildvcs=false -o eldorado-bot ./cmd/bot/ || exit 1
 
 echo "Starting chat server (persistent browser)..."
 "${XVFB_PREFIX[@]}" python3 scripts/chat_server.py &
