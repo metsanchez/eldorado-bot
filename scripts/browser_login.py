@@ -24,10 +24,12 @@ def main():
 
     log("starting patchright login for " + email)
 
+    headless = os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             channel="chrome",
-            headless=False,
+            headless=headless,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",

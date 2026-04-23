@@ -419,7 +419,15 @@ echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sud
 sudo apt update && sudo apt install google-chrome-stable
 ```
 
-Botu başlatmadan önce xvfb'yi çalıştır:
+**Önerilen:** `start.sh` Linux’ta `DISPLAY` boşken (tipik VPS) otomatik olarak `xvfb-run -a` kullanır; önce `sudo apt install -y xvfb` kurun, sonra `./start.sh`.
+
+Manuel tek komut:
+
+```bash
+xvfb-run -a ./eldorado-bot
+```
+
+Eski yöntem (elle Xvfb):
 
 ```bash
 Xvfb :99 -screen 0 1920x1080x24 &
@@ -427,11 +435,7 @@ export DISPLAY=:99
 ./eldorado-bot
 ```
 
-veya tek komutta:
-
-```bash
-DISPLAY=:99 ./eldorado-bot
-```
+Masaüstünde yine de sanal ekran istiyorsanız: `ELDORADO_XVFB=1 ./start.sh`
 
 > **Not:** Mesaj gönderme, xvfb ortamında `type()`/`press()` yerine JavaScript ile çalışacak şekilde ayarlandı. Eğer mesajlar hâlâ gitmiyorsa, `HEADLESS=1 ./eldorado-bot` ile deneyebilirsin.
 
@@ -481,7 +485,7 @@ Aynı türde tekrar uyarı gönderilmez; en az 1 saat geçmesi gerekir (spam ön
 
 1. `.env` dosyasında `BUYER_AUTO_MESSAGE` alanının dolu olduğunu kontrol edin
 2. `storage/browser_cookies.json` dosyasının var olduğunu kontrol edin
-3. **VPS'de:** `DISPLAY=:99` ile çalıştırdığınızdan emin olun. xvfb çalışıyor olmalı
+3. **VPS'de:** `./start.sh` (içinde `xvfb-run -a`) veya `xvfb-run -a ./eldorado-bot`; `xvfb` paketi kurulu olmalı
 4. Cookie'ler geçersiz olmuş olabilir — silin ve botu yeniden başlatın:
    ```bash
    rm storage/browser_cookies.json

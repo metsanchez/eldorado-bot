@@ -2,6 +2,14 @@
 # Start the Eldorado bot, killing any existing instances first
 cd "$(dirname "$0")"
 
+# VPS / headless Linux: sanal X sunucusu (apt install xvfb). Masaüstünde DISPLAY doluysa atlanır.
+XVFB_PREFIX=()
+if [ "$(uname -s)" = "Linux" ] && command -v xvfb-run >/dev/null 2>&1; then
+  if [ -z "${DISPLAY:-}" ] || [ "${ELDORADO_XVFB:-}" = "1" ]; then
+    XVFB_PREFIX=(xvfb-run -a)
+  fi
+fi
+
 MYPID=$$
 
 echo "Killing existing bot instances..."
@@ -23,10 +31,10 @@ pkill -9 -f "playwright_chromiumdev" 2>/dev/null
 sleep 2
 
 echo "Building..."
-go build -o eldobot ./cmd/bot/ || exit 1
+go build -o eldorado-bot ./cmd/bot/ || exit 1
 
 echo "Starting chat server (persistent browser)..."
-python3 scripts/chat_server.py &
+"${XVFB_PREFIX[@]}" python3 scripts/chat_server.py &
 CHAT_SERVER_PID=$!
 cleanup_chat_server() { kill $CHAT_SERVER_PID 2>/dev/null || true; }
 trap cleanup_chat_server EXIT
@@ -38,4 +46,4 @@ else
 fi
 
 echo "Starting bot..."
-./eldobot
+"${XVFB_PREFIX[@]}" ./eldorado-bot
